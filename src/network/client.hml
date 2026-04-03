@@ -10,20 +10,24 @@ import { Packet } from "./packet.hml";
 
 // Background recv loop - pushes events to channel
 async fn recv_loop(ws, event_ch) {
-    while (true) {
-        let msg = ws.recv(100);
-        if (msg == null) {
-            if (ws.closed) {
+    try {
+        while (!ws.closed) {
+            let msg = ws.recv(100);
+            if (msg == null) {
+                if (ws.closed) {
+                    break;
+                }
+                continue;
+            }
+            if (msg.type == "close") {
                 break;
             }
-            continue;
+            if (msg.type == "binary") {
+                event_ch.send({ type: "data", binary: msg.binary });
+            }
         }
-        if (msg.type == "close") {
-            break;
-        }
-        if (msg.type == "binary") {
-            event_ch.send({ type: "data", binary: msg.binary });
-        }
+    } catch (e) {
+        // Connection was closed, exit gracefully
     }
     event_ch.send({ type: "disconnect" });
 }

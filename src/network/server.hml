@@ -11,32 +11,52 @@ import { Connection } from "./connection.hml";
 
 // Per-connection receive loop - pushes events onto shared channel
 async fn connection_recv_loop(ws_conn, conn_id, event_ch) {
-    while (true) {
-        let msg = ws_conn.recv(100);
-        if (msg == null) {
-            if (ws_conn.closed) {
+    try {
+        while (!ws_conn.closed) {
+            let msg = ws_conn.recv(100);
+            if (msg == null) {
+                if (ws_conn.closed) {
+                    break;
+                }
+                continue;
+            }
+            if (msg.type == "close") {
                 break;
             }
-            continue;
+            if (msg.type == "binary") {
+                event_ch.send({ type: "data", conn_id: conn_id, binary: msg.binary });
+            }
         }
-        if (msg.type == "close") {
-            break;
-        }
-        if (msg.type == "binary") {
-            event_ch.send({ type: "data", conn_id: conn_id, binary: msg.binary });
-        }
+    } catch (e) {
+        // Connection was closed, exit gracefully
     }
-    event_ch.send({ type: "disconnect", conn_id: conn_id });
+    try {
+        event_ch.send({ type: "disconnect", conn_id: conn_id });
+    } catch (e) {
+        // Channel may be closed
+    }
 }
 
 // Accept loop - pushes new connections onto shared channel
-async fn accept_loop(ws_server, event_ch) {
+// Uses a stop channel to know when to exit before ws_server.close()
+async fn accept_loop(ws_server, event_ch, stop_ch) {
     while (true) {
-        let ws_conn = ws_server.accept(500);
-        if (ws_conn != null) {
-            event_ch.send({ type: "connect", ws_conn: ws_conn });
+        // Check if we should stop (non-blocking via select with 0 timeout)
+        let stop = select([stop_ch], 0);
+        if (stop != null) {
+            break;
+        }
+        try {
+            let ws_conn = ws_server.accept(500);
+            if (ws_conn != null) {
+                event_ch.send({ type: "connect", ws_conn: ws_conn });
+            }
+        } catch (e) {
+            break; // Server was closed
         }
     }
+    // Signal that we've stopped
+    stop_ch.send("stopped");
 }
 
 // Parse binary data into packets
@@ -71,6 +91,7 @@ export fn Server() {
         _port: null,
         _closed: false,
         _event_ch: null,
+        _stop_ch: null,
         _next_conn_id: 0,
         _on_ready: null,
         _on_connect: null,
@@ -91,6 +112,7 @@ export fn Server() {
         listen: fn(port) {
             self._port = port;
             self._event_ch = channel(256);
+            self._stop_ch = channel(2);
 
             try {
                 self._ws_server = WebSocketServer("0.0.0.0", port);
@@ -103,7 +125,7 @@ export fn Server() {
             }
 
             print("Server listening on port " + port);
-            spawn(accept_loop, self._ws_server, self._event_ch);
+            spawn(accept_loop, self._ws_server, self._event_ch, self._stop_ch);
 
             if (self._on_ready != null) {
                 self._on_ready();
@@ -113,6 +135,10 @@ export fn Server() {
             while (!self._closed) {
                 let event = self._event_ch.recv();
                 if (event == null) {
+                    break;
+                }
+
+                if (event.type == "shutdown") {
                     break;
                 }
 
@@ -199,18 +225,26 @@ export fn Server() {
 
         close: fn() {
             self._closed = true;
+            // Unblock the event loop first
+            if (self._event_ch != null) {
+                self._event_ch.send({ type: "shutdown" });
+            }
+            // Kick all client connections
             let i = 0;
             while (i < self._connections.length) {
                 self._connections[i].kick();
                 i = i + 1;
             }
+            // Signal accept loop to stop and wait for it
+            if (self._stop_ch != null) {
+                self._stop_ch.send("stop");
+                // Wait for accept loop to acknowledge (up to 2s)
+                select([self._stop_ch], 2000);
+            }
+            // Now safe to close the ws server
             if (self._ws_server != null) {
                 self._ws_server.close();
                 print("Server on port " + self._port + " closed");
-            }
-            // Send a sentinel to unblock the event loop
-            if (self._event_ch != null) {
-                self._event_ch.send({ type: "shutdown" });
             }
         },
     };
