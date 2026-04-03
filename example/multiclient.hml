@@ -1,0 +1,64 @@
+// Multiple clients connecting to one server
+import { Server } from "../src/network/server.hml";
+import { Client } from "../src/network/client.hml";
+import { Packet } from "../src/network/packet.hml";
+
+let port = 3001;
+
+let server = Server();
+server.on("connect", fn(conn) {
+    print("Server: client connected");
+});
+server.on("packet", fn(conn, packet) {
+    print("Server: got '" + packet.get(0) + "'");
+    conn.send(packet);
+});
+
+async fn run_server(srv, p) { srv.listen(p); }
+spawn(run_server, server, port);
+__sleep(1.0);
+
+print("Connecting 3 clients...");
+
+let c1 = Client();
+let c2 = Client();
+let c3 = Client();
+
+c1.connect("127.0.0.1", port);
+__sleep(0.5);
+c2.connect("127.0.0.1", port);
+__sleep(0.5);
+c3.connect("127.0.0.1", port);
+__sleep(1.0);
+
+print("All connected, sending packets...");
+
+let p1 = Packet(1);
+p1.add("from client 1");
+c1.send(p1);
+
+let p2 = Packet(1);
+p2.add("from client 2");
+c2.send(p2);
+
+let p3 = Packet(1);
+p3.add("from client 3");
+c3.send(p3);
+
+__sleep(1.0);
+
+let e1 = c1.recv_packet();
+if (e1 != null) { print("Client 1 echo: " + e1.get(0)); }
+
+let e2 = c2.recv_packet();
+if (e2 != null) { print("Client 2 echo: " + e2.get(0)); }
+
+let e3 = c3.recv_packet();
+if (e3 != null) { print("Client 3 echo: " + e3.get(0)); }
+
+c1.disconnect();
+c2.disconnect();
+c3.disconnect();
+__sleep(0.5);
+server.close();
+print("All done");
