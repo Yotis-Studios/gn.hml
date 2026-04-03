@@ -1,0 +1,99 @@
+// packet.hml - Binary packet serialization for the gn.hml protocol
+// Hemlock port of gn.js Packet.js
+
+import { create_buffer_from_data, parse_data_from_buffer } from "../util/gm_convert.hml";
+
+// Create a new Packet with the given network ID
+// Packet format: [2-byte size (LE)][2-byte netId (LE)][typed data elements...]
+export fn Packet(net_id) {
+    return {
+        net_id: net_id,
+        data: [],
+
+        // Push data to the packet (single value or array)
+        add: fn(data) {
+            let t = typeof(data);
+            if (t == "array") {
+                let i = 0;
+                while (i < data.length) {
+                    self.data.push(data[i]);
+                    i = i + 1;
+                }
+            } else {
+                self.data.push(data);
+            }
+        },
+
+        // Access data at index i
+        get: fn(i) {
+            return self.data[i];
+        },
+
+        // Load raw byte data into this packet (deserialize)
+        // data: buffer starting after the 2-byte size header
+        load: fn(data) {
+            if (data.length < 2) {
+                return;
+            }
+            // Read netId as LE u16
+            self.net_id = data[0] | (data[1] << 8);
+
+            if (data.length > 2) {
+                let i = 2;
+                while (i < data.length) {
+                    let parse = parse_data_from_buffer(data, i);
+                    if (parse.size == 0 && parse.data == null) {
+                        break;
+                    }
+                    self.data.push(parse.data);
+                    i = i + parse.size + 1; // +1 for type byte
+                }
+            }
+        },
+
+        // Serialize the packet into a buffer ready to send
+        // Returns: buffer with [size(2)][netId(2)][data...]
+        build: fn() {
+            // First pass: build all data buffers and calculate total size
+            let data_bufs = [];
+            let total_data_size = 0;
+            let i = 0;
+            while (i < self.data.length) {
+                let dbuf = create_buffer_from_data(self.data[i]);
+                data_bufs.push(dbuf);
+                total_data_size = total_data_size + dbuf.length;
+                i = i + 1;
+            }
+
+            let payload_size = 2 + total_data_size; // 2 for netId
+            let total_size = 2 + payload_size; // 2 for size header
+
+            let result = buffer(total_size);
+
+            // Write size as LE u16 (payload size, excluding the size field itself)
+            result[0] = payload_size & 0xFF;
+            result[1] = (payload_size >> 8) & 0xFF;
+
+            // Write netId as LE u16
+            let nid = self.net_id;
+            result[2] = nid & 0xFF;
+            result[3] = (nid >> 8) & 0xFF;
+
+            // Copy data buffers
+            let offset = 4;
+            i = 0;
+            while (i < data_bufs.length) {
+                let dbuf = data_bufs[i];
+                let j = 0;
+                while (j < dbuf.length) {
+                    result[offset] = dbuf[j];
+                    offset = offset + 1;
+                    j = j + 1;
+                }
+                i = i + 1;
+            }
+
+            return result;
+        },
+    };
+}

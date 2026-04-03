@@ -1,0 +1,194 @@
+// Tests for Server and Client - integration test
+// Run with: hemlock test/server_client_test.hml
+
+import { Server } from "../src/network/server.hml";
+import { Client } from "../src/network/client.hml";
+import { Packet } from "../src/network/packet.hml";
+import { sleep } from "@stdlib/time";
+
+let tests_passed = 0;
+let tests_failed = 0;
+let test_port = 19070;
+
+fn next_port() {
+    test_port = test_port + 1;
+    return test_port;
+}
+
+fn test(name, test_fn) {
+    try {
+        test_fn();
+        print("  pass: " + name);
+        tests_passed = tests_passed + 1;
+    } catch (e) {
+        print("  FAIL: " + name + " - " + e);
+        tests_failed = tests_failed + 1;
+    }
+    sleep(0.3);
+}
+
+async fn run_server(srv, p) {
+    srv.listen(p);
+}
+
+print("server/client integration:");
+
+test("client connects and receives echo", fn() {
+    let port = next_port();
+    let server = Server();
+    server.on("packet", fn(conn, packet) {
+        conn.send(packet);
+    });
+    spawn(run_server, server, port);
+    sleep(0.5);
+
+    let client = Client();
+    try {
+        client.connect("127.0.0.1", port);
+        assert(client.is_connected() == true, "Client should be connected");
+
+        let p = Packet(1);
+        p.add(42);
+        client.send(p);
+
+        let echo = client.recv_packet();
+        assert(echo != null, "Should receive echo");
+        assert(echo.get(0) == 42, "Echo should be 42");
+    } finally {
+        client.disconnect();
+        sleep(0.3);
+        server.close();
+        sleep(0.3);
+    }
+});
+
+test("string data roundtrip", fn() {
+    let port = next_port();
+    let server = Server();
+    server.on("packet", fn(conn, packet) {
+        conn.send(packet);
+    });
+    spawn(run_server, server, port);
+    sleep(0.5);
+
+    let client = Client();
+    try {
+        client.connect("127.0.0.1", port);
+
+        let p = Packet(1);
+        p.add("hello world");
+        client.send(p);
+
+        let echo = client.recv_packet();
+        assert(echo != null, "Should receive echo");
+        assert(echo.get(0) == "hello world", "Echo should be 'hello world'");
+    } finally {
+        client.disconnect();
+        sleep(0.3);
+        server.close();
+        sleep(0.3);
+    }
+});
+
+test("mixed data types", fn() {
+    let port = next_port();
+    let server = Server();
+    server.on("packet", fn(conn, packet) {
+        conn.send(packet);
+    });
+    spawn(run_server, server, port);
+    sleep(0.5);
+
+    let client = Client();
+    try {
+        client.connect("127.0.0.1", port);
+
+        let p = Packet(5);
+        p.add(0);
+        p.add(1000);
+        p.add(-50);
+        p.add("world");
+        client.send(p);
+
+        let echo = client.recv_packet();
+        assert(echo != null, "Should receive echo");
+        assert(echo.data.length == 4, "Should have 4 values");
+        assert(echo.get(0) == 0, "Value 0");
+        assert(echo.get(1) == 1000, "Value 1");
+        assert(echo.get(2) == -50, "Value 2");
+        assert(echo.get(3) == "world", "Value 3");
+    } finally {
+        client.disconnect();
+        sleep(0.3);
+        server.close();
+        sleep(0.3);
+    }
+});
+
+test("multiple packets", fn() {
+    let port = next_port();
+    let server = Server();
+    server.on("packet", fn(conn, packet) {
+        conn.send(packet);
+    });
+    spawn(run_server, server, port);
+    sleep(0.5);
+
+    let client = Client();
+    try {
+        client.connect("127.0.0.1", port);
+
+        let i = 0;
+        while (i < 3) {
+            let p = Packet(1);
+            p.add(i * 10);
+            client.send(p);
+
+            let echo = client.recv_packet();
+            assert(echo != null, "Should receive echo " + i);
+            assert(echo.get(0) == i * 10, "Echo value " + i);
+            i = i + 1;
+        }
+    } finally {
+        client.disconnect();
+        sleep(0.3);
+        server.close();
+        sleep(0.3);
+    }
+});
+
+test("large netId", fn() {
+    let port = next_port();
+    let server = Server();
+    server.on("packet", fn(conn, packet) {
+        conn.send(packet);
+    });
+    spawn(run_server, server, port);
+    sleep(0.5);
+
+    let client = Client();
+    try {
+        client.connect("127.0.0.1", port);
+
+        let p = Packet(60000);
+        p.add(99);
+        client.send(p);
+
+        let echo = client.recv_packet();
+        assert(echo != null, "Should receive echo");
+        assert(echo.net_id == 60000, "netId should be 60000");
+        assert(echo.get(0) == 99, "Data should be 99");
+    } finally {
+        client.disconnect();
+        sleep(0.3);
+        server.close();
+        sleep(0.3);
+    }
+});
+
+// ===== Summary =====
+print("");
+print("========================================");
+print("Server/Client Tests: " + tests_passed + " passed, " + tests_failed + " failed");
+print("========================================");
+assert(tests_failed == 0, "All tests should pass");

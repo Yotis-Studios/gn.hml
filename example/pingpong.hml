@@ -1,0 +1,59 @@
+// Ping Pong example - Client and server exchange messages
+// Hemlock port of gn.js pingpong.js
+
+import { Server } from "../src/network/server.hml";
+import { Client } from "../src/network/client.hml";
+import { Packet } from "../src/network/packet.hml";
+import { sleep } from "@stdlib/time";
+
+let port = 3000;
+let max_pings = 5;
+
+// Set up server (respond with Pong)
+let server = Server();
+server.on("connect", fn(conn) {
+    print("Server received connection");
+});
+server.on("disconnect", fn(conn) {
+    print("Server received disconnect");
+});
+server.on("packet", fn(conn, packet) {
+    print("Server received: " + packet.get(0));
+    sleep(0.2);
+    let pong = Packet(1);
+    pong.add("Pong");
+    conn.send(pong);
+});
+
+// Run server in background
+async fn run_server(srv, p) {
+    srv.listen(p);
+}
+spawn(run_server, server, port);
+sleep(0.5);
+
+// Connect client and play ping-pong
+let client = Client();
+client.connect("127.0.0.1", port);
+print("Client connected");
+
+let count = 0;
+while (count < max_pings) {
+    let ping = Packet(1);
+    ping.add("Ping");
+    client.send(ping);
+    print("Client sent: Ping");
+
+    let response = client.recv_packet();
+    if (response != null) {
+        print("Client received: " + response.get(0));
+    }
+
+    sleep(0.3);
+    count = count + 1;
+}
+
+print("Done after " + max_pings + " pings");
+client.disconnect();
+sleep(0.5);
+server.close();

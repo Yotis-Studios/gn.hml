@@ -1,0 +1,282 @@
+// gm_convert.hml - Binary data type conversion for the gn.hml protocol
+// Hemlock port of gn.js gmConvert.js
+
+let TYPE_U8 = 0;
+let TYPE_U16 = 1;
+let TYPE_U32 = 2;
+let TYPE_S8 = 3;
+let TYPE_S16 = 4;
+let TYPE_S32 = 5;
+let TYPE_F16 = 6;
+let TYPE_F32 = 7;
+let TYPE_F64 = 8;
+let TYPE_STRING = 9;
+let TYPE_BUFFER = 10;
+let TYPE_UNDEFINED = 11;
+
+let TYPE_COUNT = 12;
+
+// Size in bytes for fixed-size types
+let size_map = [1, 2, 4, 1, 2, 4, 2, 4, 8, 0, 0, 0];
+
+// Determine the optimal binary type for a value
+export fn determine_type(data) {
+    let t = typeof(data);
+
+    if (t == "i32" || t == "i64" || t == "u8" || t == "u16" || t == "u32" || t == "u64" || t == "i8" || t == "i16" || t == "bool") {
+        // Integer types
+        if (data >= 0) {
+            if (data < 256) {
+                return TYPE_U8;
+            } else if (data < 65536) {
+                return TYPE_U16;
+            } else {
+                return TYPE_U32;
+            }
+        } else {
+            if (data > -129) {
+                return TYPE_S8;
+            } else if (data > -32769) {
+                return TYPE_S16;
+            } else {
+                return TYPE_S32;
+            }
+        }
+    } else if (t == "f32" || t == "f64") {
+        // Float types
+        let abs_val = data;
+        if (abs_val < 0) {
+            abs_val = 0 - abs_val;
+        }
+        if (abs_val <= 16777216) {
+            return TYPE_F32;
+        }
+        return TYPE_F64;
+    } else if (t == "string") {
+        return TYPE_STRING;
+    } else if (t == "buffer") {
+        return TYPE_BUFFER;
+    }
+
+    return TYPE_UNDEFINED;
+}
+
+// Create a buffer from a single data value, prefixed with its type byte
+// Returns: buffer containing [type_byte, ...data_bytes]
+export fn create_buffer_from_data(data) {
+    let type_id = determine_type(data);
+
+    if (type_id == TYPE_U8) {
+        let buf = buffer(2);
+        buf[0] = type_id;
+        buf[1] = data;
+        return buf;
+    } else if (type_id == TYPE_U16) {
+        let buf = buffer(3);
+        buf[0] = type_id;
+        // Little-endian u16
+        buf[1] = data & 0xFF;
+        buf[2] = (data >> 8) & 0xFF;
+        return buf;
+    } else if (type_id == TYPE_U32) {
+        let buf = buffer(5);
+        buf[0] = type_id;
+        // Little-endian u32
+        buf[1] = data & 0xFF;
+        buf[2] = (data >> 8) & 0xFF;
+        buf[3] = (data >> 16) & 0xFF;
+        buf[4] = (data >> 24) & 0xFF;
+        return buf;
+    } else if (type_id == TYPE_S8) {
+        let buf = buffer(2);
+        buf[0] = type_id;
+        // Signed byte as two's complement
+        if (data < 0) {
+            buf[1] = 256 + data;
+        } else {
+            buf[1] = data;
+        }
+        return buf;
+    } else if (type_id == TYPE_S16) {
+        let buf = buffer(3);
+        buf[0] = type_id;
+        let val = data;
+        if (val < 0) {
+            val = 65536 + val;
+        }
+        buf[1] = val & 0xFF;
+        buf[2] = (val >> 8) & 0xFF;
+        return buf;
+    } else if (type_id == TYPE_S32) {
+        let buf = buffer(5);
+        buf[0] = type_id;
+        let val = data;
+        if (val < 0) {
+            val = 4294967296 + val;
+        }
+        buf[1] = val & 0xFF;
+        buf[2] = (val >> 8) & 0xFF;
+        buf[3] = (val >> 16) & 0xFF;
+        buf[4] = (val >> 24) & 0xFF;
+        return buf;
+    } else if (type_id == TYPE_F32) {
+        let buf = buffer(5);
+        buf[0] = type_id;
+        // Use ptr_write_f32 to get IEEE 754 bytes
+        let tmp = alloc(4);
+        ptr_write_f32(tmp, data);
+        buf[1] = tmp[0];
+        buf[2] = tmp[1];
+        buf[3] = tmp[2];
+        buf[4] = tmp[3];
+        free(tmp);
+        return buf;
+    } else if (type_id == TYPE_F64) {
+        let buf = buffer(9);
+        buf[0] = type_id;
+        let tmp = alloc(8);
+        ptr_write_f64(tmp, data);
+        buf[1] = tmp[0];
+        buf[2] = tmp[1];
+        buf[3] = tmp[2];
+        buf[4] = tmp[3];
+        buf[5] = tmp[4];
+        buf[6] = tmp[5];
+        buf[7] = tmp[6];
+        buf[8] = tmp[7];
+        free(tmp);
+        return buf;
+    } else if (type_id == TYPE_STRING) {
+        let str_bytes = data.to_bytes();
+        let str_len = str_bytes.length + 1; // +1 for null terminator
+        // type(1) + len(2) + data + null
+        let buf = buffer(1 + 2 + str_len);
+        buf[0] = type_id;
+        // String length as LE u16
+        buf[1] = str_len & 0xFF;
+        buf[2] = (str_len >> 8) & 0xFF;
+        // Copy string bytes
+        let i = 0;
+        while (i < str_bytes.length) {
+            buf[3 + i] = str_bytes[i];
+            i = i + 1;
+        }
+        // Null terminator
+        buf[3 + str_bytes.length] = 0;
+        return buf;
+    } else if (type_id == TYPE_BUFFER) {
+        let buf_len = data.length;
+        // type(1) + len(1) + data
+        let buf = buffer(1 + 1 + buf_len);
+        buf[0] = type_id;
+        buf[1] = buf_len;
+        let i = 0;
+        while (i < buf_len) {
+            buf[2 + i] = data[i];
+            i = i + 1;
+        }
+        return buf;
+    }
+
+    // TYPE_UNDEFINED
+    let buf = buffer(1);
+    buf[0] = type_id;
+    return buf;
+}
+
+// Parse a typed data value from a buffer at the given index
+// Returns: { data: <value>, size: <bytes consumed after type byte> }
+export fn parse_data_from_buffer(buf, index) {
+    if (index >= buf.length) {
+        return { data: null, size: 0 };
+    }
+
+    let type_id = buf[index];
+    if (type_id >= TYPE_COUNT) {
+        return { data: null, size: 0 };
+    }
+
+    index = index + 1;
+
+    if (type_id == TYPE_U8) {
+        return { data: buf[index], size: 1 };
+    } else if (type_id == TYPE_U16) {
+        let val = buf[index] | (buf[index + 1] << 8);
+        return { data: val, size: 2 };
+    } else if (type_id == TYPE_U32) {
+        let val = buf[index] | (buf[index + 1] << 8) | (buf[index + 2] << 16) | (buf[index + 3] << 24);
+        if (val < 0) {
+            val = val + 4294967296;
+        }
+        return { data: val, size: 4 };
+    } else if (type_id == TYPE_S8) {
+        let val = buf[index];
+        if (val >= 128) {
+            val = val - 256;
+        }
+        return { data: val, size: 1 };
+    } else if (type_id == TYPE_S16) {
+        let val = buf[index] | (buf[index + 1] << 8);
+        if (val >= 32768) {
+            val = val - 65536;
+        }
+        return { data: val, size: 2 };
+    } else if (type_id == TYPE_S32) {
+        let val = buf[index] | (buf[index + 1] << 8) | (buf[index + 2] << 16) | (buf[index + 3] << 24);
+        // val is already signed in hemlock's i32
+        return { data: val, size: 4 };
+    } else if (type_id == TYPE_F16 || type_id == TYPE_F32) {
+        let tmp = alloc(4);
+        tmp[0] = buf[index];
+        tmp[1] = buf[index + 1];
+        tmp[2] = buf[index + 2];
+        tmp[3] = buf[index + 3];
+        let val = ptr_read_f32(tmp);
+        free(tmp);
+        let sz = size_map[type_id];
+        return { data: val, size: sz };
+    } else if (type_id == TYPE_F64) {
+        let tmp = alloc(8);
+        tmp[0] = buf[index];
+        tmp[1] = buf[index + 1];
+        tmp[2] = buf[index + 2];
+        tmp[3] = buf[index + 3];
+        tmp[4] = buf[index + 4];
+        tmp[5] = buf[index + 5];
+        tmp[6] = buf[index + 6];
+        tmp[7] = buf[index + 7];
+        let val = ptr_read_f64(tmp);
+        free(tmp);
+        return { data: val, size: 8 };
+    } else if (type_id == TYPE_STRING) {
+        let str_len = buf[index] | (buf[index + 1] << 8);
+        index = index + 2;
+        // Strip null terminator if present
+        let str_end = str_len;
+        if (str_len > 0 && buf[index + str_len - 1] == 0) {
+            str_end = str_len - 1;
+        }
+        // Build byte array for string conversion
+        let bytes = [];
+        let i = 0;
+        while (i < str_end) {
+            bytes.push(buf[index + i]);
+            i = i + 1;
+        }
+        let val = __string_from_bytes(bytes);
+        return { data: val, size: str_len + 2 };
+    } else if (type_id == TYPE_BUFFER) {
+        let buf_len = buf[index];
+        index = index + 1;
+        let result_buf = buffer(buf_len);
+        let i = 0;
+        while (i < buf_len) {
+            result_buf[i] = buf[index + i];
+            i = i + 1;
+        }
+        return { data: result_buf, size: buf_len + 1 };
+    }
+
+    // TYPE_UNDEFINED
+    return { data: null, size: 0 };
+}

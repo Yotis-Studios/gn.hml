@@ -1,0 +1,217 @@
+// server.hml - WebSocket server that manages multiple client connections
+// Hemlock port of gn.js Server.js
+//
+// listen() blocks the calling thread and runs an event loop that
+// dispatches connect/packet/disconnect events to registered callbacks.
+// Recv loops for each connection push events through a shared channel.
+
+import { WebSocketServer } from "@stdlib/websocket";
+import { Packet } from "./packet.hml";
+import { Connection } from "./connection.hml";
+
+// Per-connection receive loop - pushes events onto shared channel
+async fn connection_recv_loop(ws_conn, conn_id, event_ch) {
+    while (true) {
+        let msg = ws_conn.recv(100);
+        if (msg == null) {
+            if (ws_conn.closed) {
+                break;
+            }
+            continue;
+        }
+        if (msg.type == "close") {
+            break;
+        }
+        if (msg.type == "binary") {
+            event_ch.send({ type: "data", conn_id: conn_id, binary: msg.binary });
+        }
+    }
+    event_ch.send({ type: "disconnect", conn_id: conn_id });
+}
+
+// Accept loop - pushes new connections onto shared channel
+async fn accept_loop(ws_server, event_ch) {
+    while (true) {
+        let ws_conn = ws_server.accept(500);
+        if (ws_conn != null) {
+            event_ch.send({ type: "connect", ws_conn: ws_conn });
+        }
+    }
+}
+
+// Parse binary data into packets
+fn parse_packets(data) {
+    let packets = [];
+    let offset = 0;
+    while (offset + 2 <= data.length) {
+        let size = data[offset] | (data[offset + 1] << 8);
+        if (size == 0 || offset + 2 + size > data.length) {
+            break;
+        }
+        let payload = buffer(size);
+        let i = 0;
+        while (i < size) {
+            payload[i] = data[offset + 2 + i];
+            i = i + 1;
+        }
+        let packet = Packet(0);
+        packet.load(payload);
+        packets.push(packet);
+        offset = offset + 2 + size;
+    }
+    return packets;
+}
+
+// Create a new Server
+export fn Server() {
+    return {
+        _connections: [],
+        _conn_map: [],
+        _ws_server: null,
+        _port: null,
+        _closed: false,
+        _event_ch: null,
+        _next_conn_id: 0,
+        _on_ready: null,
+        _on_connect: null,
+        _on_packet: null,
+        _on_disconnect: null,
+        _on_error: null,
+
+        on: fn(event, callback) {
+            if (event == "ready") { self._on_ready = callback; }
+            else if (event == "connect") { self._on_connect = callback; }
+            else if (event == "packet") { self._on_packet = callback; }
+            else if (event == "disconnect") { self._on_disconnect = callback; }
+            else if (event == "error") { self._on_error = callback; }
+        },
+
+        // Start listening. BLOCKS the calling thread and runs the event loop.
+        // Register all callbacks with on() before calling this.
+        listen: fn(port) {
+            self._port = port;
+            self._event_ch = channel(256);
+
+            try {
+                self._ws_server = WebSocketServer("0.0.0.0", port);
+            } catch (e) {
+                print("Server error: " + e);
+                if (self._on_error != null) {
+                    self._on_error(e);
+                }
+                return;
+            }
+
+            print("Server listening on port " + port);
+            spawn(accept_loop, self._ws_server, self._event_ch);
+
+            if (self._on_ready != null) {
+                self._on_ready();
+            }
+
+            // Event loop - blocks here, dispatching events
+            while (!self._closed) {
+                let event = self._event_ch.recv();
+                if (event == null) {
+                    break;
+                }
+
+                if (event.type == "connect") {
+                    let conn_id = self._next_conn_id;
+                    self._next_conn_id = self._next_conn_id + 1;
+
+                    let connection = Connection(event.ws_conn, self);
+                    self._connections.push(connection);
+                    self._conn_map.push({ id: conn_id, conn: connection });
+
+                    spawn(connection_recv_loop, event.ws_conn, conn_id, self._event_ch);
+
+                    if (self._on_connect != null) {
+                        self._on_connect(connection);
+                    }
+
+                } else if (event.type == "data") {
+                    let connection = null;
+                    let i = 0;
+                    while (i < self._conn_map.length) {
+                        if (self._conn_map[i].id == event.conn_id) {
+                            connection = self._conn_map[i].conn;
+                            break;
+                        }
+                        i = i + 1;
+                    }
+                    if (connection != null) {
+                        let packets = parse_packets(event.binary);
+                        let j = 0;
+                        while (j < packets.length) {
+                            if (self._on_packet != null) {
+                                self._on_packet(connection, packets[j]);
+                            }
+                            j = j + 1;
+                        }
+                    }
+
+                } else if (event.type == "disconnect") {
+                    let connection = null;
+                    let i = 0;
+                    while (i < self._conn_map.length) {
+                        if (self._conn_map[i].id == event.conn_id) {
+                            connection = self._conn_map[i].conn;
+                            self._conn_map.remove(i);
+                            break;
+                        }
+                        i = i + 1;
+                    }
+                    if (connection != null) {
+                        i = 0;
+                        while (i < self._connections.length) {
+                            if (self._connections[i] == connection) {
+                                self._connections.remove(i);
+                                break;
+                            }
+                            i = i + 1;
+                        }
+                        connection.code = 1000;
+                        connection.message = "closed";
+                        if (self._on_disconnect != null) {
+                            self._on_disconnect(connection);
+                        }
+                    }
+                }
+            }
+        },
+
+        broadcast: fn(packet, exclude) {
+            let data = null;
+            if (typeof(packet) == "object" && packet.build != null) {
+                data = packet.build();
+            } else {
+                data = packet;
+            }
+            let i = 0;
+            while (i < self._connections.length) {
+                if (self._connections[i] != exclude) {
+                    self._connections[i].send(data);
+                }
+                i = i + 1;
+            }
+        },
+
+        close: fn() {
+            self._closed = true;
+            let i = 0;
+            while (i < self._connections.length) {
+                self._connections[i].kick();
+                i = i + 1;
+            }
+            if (self._ws_server != null) {
+                self._ws_server.close();
+                print("Server on port " + self._port + " closed");
+            }
+            // Send a sentinel to unblock the event loop
+            if (self._event_ch != null) {
+                self._event_ch.send({ type: "shutdown" });
+            }
+        },
+    };
+}

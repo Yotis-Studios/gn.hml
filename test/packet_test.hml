@@ -1,0 +1,155 @@
+// Tests for packet.hml - packet serialization
+// Run with: hemlock test/packet_test.hml
+
+import { Packet } from "../src/network/packet.hml";
+
+let tests_passed = 0;
+let tests_failed = 0;
+
+fn test(name, test_fn) {
+    try {
+        test_fn();
+        print("  pass: " + name);
+        tests_passed = tests_passed + 1;
+    } catch (e) {
+        print("  FAIL: " + name + " - " + e);
+        tests_failed = tests_failed + 1;
+    }
+}
+
+// ===== Constructor =====
+print("constructor:");
+
+test("sets netId", fn() {
+    let p = Packet(5);
+    assert(p.net_id == 5);
+});
+
+test("starts with empty data", fn() {
+    let p = Packet(1);
+    assert(p.data.length == 0);
+});
+
+// ===== add/get =====
+print("");
+print("add/get:");
+
+test("add single value", fn() {
+    let p = Packet(1);
+    p.add(42);
+    assert(p.data.length == 1);
+    assert(p.get(0) == 42);
+});
+
+test("add multiple values", fn() {
+    let p = Packet(1);
+    p.add(1);
+    p.add("hello");
+    p.add(-5);
+    assert(p.data.length == 3);
+    assert(p.get(0) == 1);
+    assert(p.get(1) == "hello");
+    assert(p.get(2) == -5);
+});
+
+test("add array", fn() {
+    let p = Packet(1);
+    p.add([10, 20, 30]);
+    assert(p.data.length == 3);
+    assert(p.get(0) == 10);
+    assert(p.get(1) == 20);
+    assert(p.get(2) == 30);
+});
+
+// ===== build/load roundtrip =====
+print("");
+print("build/load roundtrip:");
+
+test("empty packet", fn() {
+    let p = Packet(7);
+    let built = p.build();
+    // size(2) + netId(2) = 4 bytes minimum, size field = 2
+    assert(built.length == 4, "Empty packet should be 4 bytes");
+    // size field should be 2 (just netId)
+    assert(built[0] == 2);
+    assert(built[1] == 0);
+    // netId = 7
+    assert(built[2] == 7);
+    assert(built[3] == 0);
+});
+
+test("packet with u8", fn() {
+    let p = Packet(1);
+    p.add(42);
+    let built = p.build();
+
+    let p2 = Packet(0);
+    // Load from after the size header
+    let payload = buffer(built.length - 2);
+    let i = 0;
+    while (i < payload.length) {
+        payload[i] = built[i + 2];
+        i = i + 1;
+    }
+    p2.load(payload);
+    assert(p2.net_id == 1, "netId should be 1");
+    assert(p2.data.length == 1, "Should have 1 data element");
+    assert(p2.get(0) == 42, "Data should be 42");
+});
+
+test("packet with mixed types", fn() {
+    let p = Packet(100);
+    p.add(255);
+    p.add("test");
+    p.add(-10);
+    p.add(1000);
+
+    let built = p.build();
+
+    let p2 = Packet(0);
+    let payload = buffer(built.length - 2);
+    let i = 0;
+    while (i < payload.length) {
+        payload[i] = built[i + 2];
+        i = i + 1;
+    }
+    p2.load(payload);
+
+    assert(p2.net_id == 100, "netId should be 100");
+    assert(p2.data.length == 4, "Should have 4 data elements");
+    assert(p2.get(0) == 255, "First value");
+    assert(p2.get(1) == "test", "Second value");
+    assert(p2.get(2) == -10, "Third value");
+    assert(p2.get(3) == 1000, "Fourth value");
+});
+
+test("large netId", fn() {
+    let p = Packet(60000);
+    p.add(1);
+    let built = p.build();
+
+    let p2 = Packet(0);
+    let payload = buffer(built.length - 2);
+    let i = 0;
+    while (i < payload.length) {
+        payload[i] = built[i + 2];
+        i = i + 1;
+    }
+    p2.load(payload);
+    assert(p2.net_id == 60000, "netId should be 60000");
+});
+
+test("undersized data ignored", fn() {
+    let p = Packet(0);
+    let tiny = buffer(1);
+    tiny[0] = 5;
+    p.load(tiny);
+    assert(p.data.length == 0, "Should have no data from undersized buffer");
+});
+
+// ===== Summary =====
+print("");
+print("========================================");
+print("Packet Tests: " + tests_passed + " passed, " + tests_failed + " failed");
+print("========================================");
+assert(tests_failed == 0, "All tests should pass");

@@ -1,0 +1,42 @@
+// connection.hml - Server-side connection wrapper
+// Hemlock port of gn.js Connection.js
+
+import { Packet } from "./packet.hml";
+
+// Create a Connection wrapping a WebSocket connection handle
+export fn Connection(ws, server) {
+    return {
+        ws: ws,
+        server: server,
+        code: null,
+        message: null,
+
+        // Send a Packet or raw buffer to this connection
+        send: fn(packet) {
+            let data = null;
+            if (typeof(packet) == "object" && packet.build != null) {
+                data = packet.build();
+            } else {
+                data = packet;
+            }
+            try {
+                self.ws.send_binary(data);
+            } catch (e) {
+                print("Error sending: " + e);
+                if (self.server._on_error != null) {
+                    self.server._on_error(e, self);
+                }
+            }
+        },
+
+        // Broadcast a packet to all connections except this one
+        broadcast: fn(packet) {
+            self.server.broadcast(packet, self);
+        },
+
+        // Close this connection
+        kick: fn() {
+            self.ws.close();
+        },
+    };
+}
