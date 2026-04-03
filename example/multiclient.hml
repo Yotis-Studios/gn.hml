@@ -1,7 +1,8 @@
-// Multiple clients connecting to one server
+// Multiple clients connecting to one server concurrently
 import { Server } from "../src/network/server.hml";
 import { Client } from "../src/network/client.hml";
 import { Packet } from "../src/network/packet.hml";
+import { sleep } from "@stdlib/time";
 
 let port = 3001;
 
@@ -13,10 +14,13 @@ server.on("packet", fn(conn, packet) {
     print("Server: got '" + packet.get(0) + "'");
     conn.send(packet);
 });
+server.on("disconnect", fn(conn) {
+    print("Server: client disconnected");
+});
 
 async fn run_server(srv, p) { srv.listen(p); }
 spawn(run_server, server, port);
-__sleep(1.0);
+sleep(1.0);
 
 print("Connecting 3 clients...");
 
@@ -25,11 +29,11 @@ let c2 = Client();
 let c3 = Client();
 
 c1.connect("127.0.0.1", port);
-__sleep(0.5);
+sleep(0.5);
 c2.connect("127.0.0.1", port);
-__sleep(0.5);
+sleep(0.5);
 c3.connect("127.0.0.1", port);
-__sleep(1.0);
+sleep(1.0);
 
 print("All connected, sending packets...");
 
@@ -45,7 +49,7 @@ let p3 = Packet(1);
 p3.add("from client 3");
 c3.send(p3);
 
-__sleep(1.0);
+sleep(1.0);
 
 let e1 = c1.recv_packet();
 if (e1 != null) { print("Client 1 echo: " + e1.get(0)); }
@@ -59,6 +63,6 @@ if (e3 != null) { print("Client 3 echo: " + e3.get(0)); }
 c1.disconnect();
 c2.disconnect();
 c3.disconnect();
-__sleep(0.5);
+sleep(0.5);
 server.close();
 print("All done");
