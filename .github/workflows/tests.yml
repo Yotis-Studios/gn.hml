@@ -1,0 +1,40 @@
+name: Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential gcc make libwebsockets-dev libffi-dev zlib1g-dev libssl-dev
+
+    - name: Build Hemlock
+      run: |
+        git clone --depth 1 https://github.com/hemlang/hemlock.git /tmp/hemlock
+        cd /tmp/hemlock
+        make
+        sudo cp hemlock /usr/local/bin/
+
+    - name: Run unit tests - gm_convert
+      run: hemlock test/gm_convert_test.hml
+
+    - name: Run unit tests - packet
+      run: hemlock test/packet_test.hml
+
+    - name: Run integration tests - server/client
+      run: timeout 60 hemlock test/server_client_test.hml
+
+    - name: Run example - echo
+      run: timeout 20 hemlock example/echo.hml
+
+    - name: Run example - pingpong
+      run: timeout 20 hemlock example/pingpong.hml
