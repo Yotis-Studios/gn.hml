@@ -76,7 +76,7 @@ hemlock test/server_client_test.hml
 ## Hemlock Quirks Found During Development
 
 - **`spawn()` without capturing the handle was broken before 1.9.4.** The task would get freed while the thread was still running (use-after-free). Fixed by having the worker thread hold a reference. Always use Hemlock >= 1.9.4.
-- **`__sleep()` vs `sleep()` from `@stdlib/time`**: Both are the same function, but the stdlib import ensures the module system is initialized. Prefer `import { sleep } from "@stdlib/time"`.
+- **`__sleep()` vs `sleep()` from `@stdlib/time`**: Both are the same function. Either works. Prefer the stdlib import for consistency.
 - **Object method syntax**: Use `name: fn() {}` not `fn name() {}` inside object literals. The latter is a parse error.
 - **`select([ch], 0)` works** for non-blocking channel poll when data is already buffered. Works correctly with channels shared across tasks.
 - **WebSocket binary recv** requires `__lws_msg_binary` builtin (added in 1.9.3). Messages arrive as `{ type: "binary", binary: <buffer> }`.
