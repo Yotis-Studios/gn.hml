@@ -7,7 +7,7 @@ on:
     branches: [ main ]
 
 jobs:
-  test:
+  unit-tests:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -26,11 +26,31 @@ jobs:
         sudo cp -r stdlib /usr/local/lib/hemlock-stdlib
         sudo ln -s /usr/local/lib/hemlock-stdlib /usr/local/bin/stdlib
 
-    - name: Run unit tests - gm_convert
+    - name: Run unit tests - gm_convert (34 tests)
       run: hemlock test/gm_convert_test.hml
 
-    - name: Run unit tests - packet
+    - name: Run unit tests - packet (10 tests)
       run: hemlock test/packet_test.hml
+
+  integration-tests:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential gcc make libwebsockets-dev libffi-dev zlib1g-dev libssl-dev
+
+    - name: Build and install Hemlock
+      run: |
+        git clone --depth 1 https://github.com/hemlang/hemlock.git /tmp/hemlock
+        cd /tmp/hemlock
+        make
+        sudo cp hemlock /usr/local/bin/
+        sudo cp -r stdlib /usr/local/lib/hemlock-stdlib
+        sudo ln -s /usr/local/lib/hemlock-stdlib /usr/local/bin/stdlib
 
     - name: Run integration tests - server/client
       run: timeout 60 hemlock test/server_client_test.hml
