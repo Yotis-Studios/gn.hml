@@ -56,6 +56,7 @@ src/
 example/
   echo.hml               - echo server/client demo
   pingpong.hml           - ping-pong exchange demo
+  multiclient.hml        - 3 concurrent clients demo
 test/
   gm_convert_test.hml    - 34 tests for binary conversion
   packet_test.hml        - 10 tests for packet serialization
@@ -64,7 +65,7 @@ test/
 
 ## Running
 
-Requires Hemlock 1.9.4+ (for WebSocket binary support and spawn fix).
+Requires Hemlock 2.0.0+ (uses `@stdlib/websocket` module which requires `make stdlib` during Hemlock build).
 
 ```bash
 hemlock example/echo.hml
@@ -75,11 +76,10 @@ hemlock test/server_client_test.hml
 
 ## Hemlock Quirks Found During Development
 
-- **`spawn()` without capturing the handle was broken before 1.9.4.** The task would get freed while the thread was still running (use-after-free). Fixed by having the worker thread hold a reference. Always use Hemlock >= 1.9.4.
-- **`__sleep()` vs `sleep()` from `@stdlib/time`**: Both are the same function. Either works. Prefer the stdlib import for consistency.
+- **Hemlock 2.0.0 moved 63 builtins to `@stdlib` modules.** Math, signal, net, process, fs, atomic, debug, and ffi functions now require explicit imports. This project's builtins (`alloc`, `free`, `ptr_write_f32`, `__string_from_bytes`, etc.) were NOT moved and remain available globally.
+- **`@stdlib/websocket` requires `make stdlib`** during Hemlock build to compile the libwebsockets C wrapper (`lws_wrapper.so`). Without it, WebSocket imports will fail at runtime.
 - **Object method syntax**: Use `name: fn() {}` not `fn name() {}` inside object literals. The latter is a parse error.
 - **`select([ch], 0)` works** for non-blocking channel poll when data is already buffered. Works correctly with channels shared across tasks.
-- **WebSocket binary recv** requires `__lws_msg_binary` builtin (added in 1.9.3). Messages arrive as `{ type: "binary", binary: <buffer> }`.
-- **Port reuse**: WebSocket servers need `LWS_SERVER_OPTION_ALLOW_LISTEN_SHARE` for rapid rebind after close (added in 1.9.4).
+- **WebSocket recv messages** arrive as `{ type: "binary", binary: <buffer> }` for binary data and `{ type: "close" }` for disconnections via `@stdlib/websocket`.
 - **Float serialization**: Uses `ptr_write_f32`/`ptr_read_f32` via temporary `alloc()` buffers to get IEEE 754 bytes. Native byte order matches the LE protocol on x86/ARM.
 - **String-to-bytes**: Use `str.to_bytes()` for UTF-8 buffer, `__string_from_bytes(array)` for reconstruction.
