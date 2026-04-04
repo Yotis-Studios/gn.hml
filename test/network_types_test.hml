@@ -1,0 +1,145 @@
+// Network data type tests - floats, negatives, large values, client callback API
+// Run with: hemlock test/network_types_test.hml
+
+import { Server } from "../src/network/server.hml";
+import { Client } from "../src/network/client.hml";
+import { Packet } from "../src/network/packet.hml";
+import { sleep } from "@stdlib/time";
+
+let tests_passed = 0;
+let tests_failed = 0;
+
+async fn run_server(srv, p) {
+    srv.listen(p);
+}
+
+print("data types over network:");
+
+// Test: f32 float value roundtrips through server echo
+try {
+    let server = Server();
+    server.on("packet", fn(conn, pkt) { conn.send(pkt); });
+    spawn(run_server, server, 19901);
+    sleep(0.5);
+    let client = Client();
+    client.connect("127.0.0.1", 19901);
+    let p = Packet(1);
+    p.add(3.14);
+    client.send(p);
+    let echo = client.recv_packet();
+    assert(echo != null, "Should receive echo");
+    let diff = echo.get(0) - 3.14;
+    if (diff < 0) { diff = 0 - diff; }
+    assert(diff < 0.01, "Float should roundtrip approximately");
+    client.disconnect();
+    sleep(0.3);
+    server.close();
+    sleep(2.0);
+    print("  pass: f32 roundtrip over network");
+    tests_passed = tests_passed + 1;
+} catch (e) {
+    print("  FAIL: f32 roundtrip over network - " + e);
+    tests_failed = tests_failed + 1;
+}
+
+// Test: negative s8/s16/s32 values roundtrip through server echo
+try {
+    let server = Server();
+    server.on("packet", fn(conn, pkt) { conn.send(pkt); });
+    spawn(run_server, server, 19902);
+    sleep(0.5);
+    let client = Client();
+    client.connect("127.0.0.1", 19902);
+    let p = Packet(1);
+    p.add(-1);
+    p.add(-1000);
+    p.add(-100000);
+    client.send(p);
+    let echo = client.recv_packet();
+    assert(echo != null, "Should receive echo");
+    assert(echo.data.length == 3, "Should have 3 values");
+    assert(echo.get(0) == -1, "s8 value");
+    assert(echo.get(1) == -1000, "s16 value");
+    assert(echo.get(2) == -100000, "s32 value");
+    client.disconnect();
+    sleep(0.3);
+    server.close();
+    sleep(2.0);
+    print("  pass: negative values over network");
+    tests_passed = tests_passed + 1;
+} catch (e) {
+    print("  FAIL: negative values over network - " + e);
+    tests_failed = tests_failed + 1;
+}
+
+// Test: large u32 value roundtrips through server echo
+try {
+    let server = Server();
+    server.on("packet", fn(conn, pkt) { conn.send(pkt); });
+    spawn(run_server, server, 19903);
+    sleep(0.5);
+    let client = Client();
+    client.connect("127.0.0.1", 19903);
+    let p = Packet(1);
+    p.add(100000);
+    client.send(p);
+    let echo = client.recv_packet();
+    assert(echo != null, "Should receive echo");
+    assert(echo.get(0) == 100000, "u32 value should roundtrip");
+    client.disconnect();
+    sleep(0.3);
+    server.close();
+    sleep(2.0);
+    print("  pass: large u32 value over network");
+    tests_passed = tests_passed + 1;
+} catch (e) {
+    print("  FAIL: large u32 value over network - " + e);
+    tests_failed = tests_failed + 1;
+}
+
+print("");
+print("client callback API:");
+
+// Test: client on("packet") + run() dispatches packets via callbacks
+try {
+    let server = Server();
+    server.on("packet", fn(conn, pkt) {
+        conn.send(pkt);
+        sleep(0.1);
+        let term = Packet(0);
+        term.add(255);
+        conn.send(term);
+    });
+    spawn(run_server, server, 19904);
+    sleep(0.5);
+    let received = [];
+    let client = Client();
+    client.on("packet", fn(pkt) {
+        received.push(pkt.get(0));
+        if (pkt.net_id == 0) {
+            client.disconnect();
+        }
+    });
+    client.connect("127.0.0.1", 19904);
+    let p = Packet(1);
+    p.add(77);
+    client.send(p);
+    client.run();
+    assert(received.length >= 1, "Should have received at least 1 packet");
+    assert(received[0] == 77, "First packet should be 77");
+    client.disconnect();
+    sleep(0.3);
+    server.close();
+    sleep(2.0);
+    print("  pass: client on(packet) + run() receives packets");
+    tests_passed = tests_passed + 1;
+} catch (e) {
+    print("  FAIL: client on(packet) + run() receives packets - " + e);
+    tests_failed = tests_failed + 1;
+}
+
+print("");
+print("========================================");
+print("Network Types Tests: " + tests_passed + " passed, " + tests_failed + " failed");
+print("========================================");
+assert(tests_failed == 0, "All tests should pass");

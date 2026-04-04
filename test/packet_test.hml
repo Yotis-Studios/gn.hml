@@ -139,6 +139,65 @@ test("large netId", fn() {
     assert(p2.net_id == 60000, "netId should be 60000");
 });
 
+test("packet with float", fn() {
+    let p = Packet(2);
+    p.add(3.14);
+    let built = p.build();
+
+    let p2 = Packet(0);
+    let payload = buffer(built.length - 2);
+    let i = 0;
+    while (i < payload.length) {
+        payload[i] = built[i + 2];
+        i = i + 1;
+    }
+    p2.load(payload);
+    assert(p2.net_id == 2, "netId should be 2");
+    assert(p2.data.length == 1, "Should have 1 data element");
+    let diff = p2.get(0) - 3.14;
+    if (diff < 0) { diff = 0 - diff; }
+    assert(diff < 0.001, "Data should be ~3.14");
+});
+
+test("packet with null stops parsing (known limitation)", fn() {
+    // null/undefined has size=0 which triggers the parse break condition
+    // so it cannot be followed by more data in a packet
+    let p = Packet(3);
+    p.add(null);
+    let built = p.build();
+
+    let p2 = Packet(0);
+    let payload = buffer(built.length - 2);
+    let i = 0;
+    while (i < payload.length) {
+        payload[i] = built[i + 2];
+        i = i + 1;
+    }
+    p2.load(payload);
+    assert(p2.net_id == 3, "netId should be 3");
+    assert(p2.data.length == 0, "null stops parsing early");
+});
+
+test("packet with negative values", fn() {
+    let p = Packet(4);
+    p.add(-128);
+    p.add(-32768);
+    p.add(-100000);
+    let built = p.build();
+
+    let p2 = Packet(0);
+    let payload = buffer(built.length - 2);
+    let i = 0;
+    while (i < payload.length) {
+        payload[i] = built[i + 2];
+        i = i + 1;
+    }
+    p2.load(payload);
+    assert(p2.get(0) == -128, "s8 value");
+    assert(p2.get(1) == -32768, "s16 value");
+    assert(p2.get(2) == -100000, "s32 value");
+});
+
 test("undersized data ignored", fn() {
     let p = Packet(0);
     let tiny = buffer(1);
