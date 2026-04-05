@@ -1,7 +1,7 @@
 // packet.hml - Binary packet serialization for the gn.hml protocol
 // Hemlock port of gn.js Packet.js
 
-import { create_buffer_from_data, parse_data_from_buffer } from "../util/gm_convert.hml";
+import { create_buffer_from_data, parse_data_from_buffer, determine_type, data_size, write_data_to_buffer } from "../util/gm_convert.hml";
 
 // Create a new Packet with the given network ID
 // Packet format: [2-byte size (LE)][2-byte netId (LE)][typed data elements...]
@@ -36,7 +36,7 @@ export fn Packet(net_id) {
                 return;
             }
             // Read netId as LE u16
-            self.net_id = data[0] | (data[1] << 8);
+            self.net_id = data.read_u16_le(0);
 
             if (data.length > 2) {
                 let i = 2;
@@ -54,40 +54,31 @@ export fn Packet(net_id) {
         // Serialize the packet into a buffer ready to send
         // Returns: buffer with [size(2)][netId(2)][data...]
         build: fn() {
-            // First pass: build all data buffers and calculate total size
-            let data_bufs = [];
-            data_bufs.reserve(self.data.length);
+            // First pass: determine types and calculate total size
+            let len = self.data.length;
+            let types = [];
+            types.reserve(len);
             let total_data_size = 0;
             let i = 0;
-            while (i < self.data.length) {
-                let dbuf = create_buffer_from_data(self.data[i]);
-                data_bufs.push(dbuf);
-                total_data_size = total_data_size + dbuf.length;
+            while (i < len) {
+                let tid = determine_type(self.data[i]);
+                types.push(tid);
+                total_data_size = total_data_size + data_size(tid, self.data[i]);
                 i = i + 1;
             }
 
             let payload_size = 2 + total_data_size; // 2 for netId
-            let total_size = 2 + payload_size; // 2 for size header
 
-            let result = buffer(total_size);
+            // Single allocation, single pass write
+            let result = buffer(2 + payload_size);
+            result.write_u16_le(0, payload_size);
+            result.write_u16_le(2, self.net_id);
 
-            // Write size as LE u16 (payload size, excluding the size field itself)
-            result[0] = payload_size & 0xFF;
-            result[1] = (payload_size >> 8) & 0xFF;
-
-            // Write netId as LE u16
-            let nid = self.net_id;
-            result[2] = nid & 0xFF;
-            result[3] = (nid >> 8) & 0xFF;
-
-            // Copy data buffers using memcpy for bulk transfer
-            let result_ptr = buffer_ptr(result);
+            // Write all data elements directly into result buffer
             let offset = 4;
             i = 0;
-            while (i < data_bufs.length) {
-                let dbuf = data_bufs[i];
-                memcpy(result_ptr + offset, buffer_ptr(dbuf), dbuf.length);
-                offset = offset + dbuf.length;
+            while (i < len) {
+                offset = offset + write_data_to_buffer(result, offset, types[i], self.data[i]);
                 i = i + 1;
             }
 

@@ -68,98 +68,130 @@ export fn create_buffer_from_data(data) {
 
     if (type_id == TYPE_U8) {
         let buf = buffer(2);
-        buf[0] = type_id;
-        buf[1] = data;
+        buf.write_u8(0, type_id);
+        buf.write_u8(1, data);
         return buf;
     } else if (type_id == TYPE_U16) {
         let buf = buffer(3);
-        buf[0] = type_id;
-        // Little-endian u16
-        buf[1] = data & 0xFF;
-        buf[2] = (data >> 8) & 0xFF;
+        buf.write_u8(0, type_id);
+        buf.write_u16_le(1, data);
         return buf;
     } else if (type_id == TYPE_U32) {
         let buf = buffer(5);
-        buf[0] = type_id;
-        // Little-endian u32
-        buf[1] = data & 0xFF;
-        buf[2] = (data >> 8) & 0xFF;
-        buf[3] = (data >> 16) & 0xFF;
-        buf[4] = (data >> 24) & 0xFF;
+        buf.write_u8(0, type_id);
+        buf.write_u32_le(1, data);
         return buf;
     } else if (type_id == TYPE_S8) {
         let buf = buffer(2);
-        buf[0] = type_id;
-        // Signed byte as two's complement
-        if (data < 0) {
-            buf[1] = 256 + data;
-        } else {
-            buf[1] = data;
-        }
+        buf.write_u8(0, type_id);
+        buf.write_i8(1, data);
         return buf;
     } else if (type_id == TYPE_S16) {
         let buf = buffer(3);
-        buf[0] = type_id;
-        let val = data;
-        if (val < 0) {
-            val = 65536 + val;
-        }
-        buf[1] = val & 0xFF;
-        buf[2] = (val >> 8) & 0xFF;
+        buf.write_u8(0, type_id);
+        buf.write_i16_le(1, data);
         return buf;
     } else if (type_id == TYPE_S32) {
         let buf = buffer(5);
-        buf[0] = type_id;
-        let val = data;
-        if (val < 0) {
-            val = 4294967296 + val;
-        }
-        buf[1] = val & 0xFF;
-        buf[2] = (val >> 8) & 0xFF;
-        buf[3] = (val >> 16) & 0xFF;
-        buf[4] = (val >> 24) & 0xFF;
+        buf.write_u8(0, type_id);
+        buf.write_i32_le(1, data);
         return buf;
     } else if (type_id == TYPE_F32) {
         let buf = buffer(5);
-        buf[0] = type_id;
-        // Write IEEE 754 f32 directly into buffer via pointer
-        ptr_write_f32(buffer_ptr(buf) + 1, data);
+        buf.write_u8(0, type_id);
+        buf.write_f32_le(1, data);
         return buf;
     } else if (type_id == TYPE_F64) {
         let buf = buffer(9);
-        buf[0] = type_id;
-        // Write IEEE 754 f64 directly into buffer via pointer
-        ptr_write_f64(buffer_ptr(buf) + 1, data);
+        buf.write_u8(0, type_id);
+        buf.write_f64_le(1, data);
         return buf;
     } else if (type_id == TYPE_STRING) {
         let byte_len = data.byte_length;
-        let str_len = byte_len + 1; // +1 for null terminator
-        // type(1) + len(2) + data + null
+        let str_len = byte_len + 1;
         let buf = buffer(1 + 2 + str_len);
-        buf[0] = type_id;
-        // String length as LE u16
-        buf[1] = str_len & 0xFF;
-        buf[2] = (str_len >> 8) & 0xFF;
-        // Copy string bytes directly from string memory (no to_bytes() alloc)
+        buf.write_u8(0, type_id);
+        buf.write_u16_le(1, str_len);
         memcpy(buffer_ptr(buf) + 3, data.byte_ptr(), byte_len);
-        // Null terminator
-        buf[3 + byte_len] = 0;
+        buf.write_u8(3 + byte_len, 0);
         return buf;
     } else if (type_id == TYPE_BUFFER) {
         let buf_len = data.length;
-        // type(1) + len(1) + data
         let buf = buffer(1 + 1 + buf_len);
-        buf[0] = type_id;
-        buf[1] = buf_len;
-        // Copy buffer data via memcpy
-        memcpy(buffer_ptr(buf) + 2, buffer_ptr(data), buf_len);
+        buf.write_u8(0, type_id);
+        buf.write_u8(1, buf_len);
+        buf.write_bytes(2, data, buf_len);
         return buf;
     }
 
     // TYPE_UNDEFINED
     let buf = buffer(1);
-    buf[0] = type_id;
+    buf.write_u8(0, type_id);
     return buf;
+}
+
+// Calculate the total byte size for a typed data element (type byte + data bytes)
+export fn data_size(type_id, data) {
+    if (type_id <= TYPE_S32) {
+        return 1 + size_map[type_id]; // type + fixed size
+    } else if (type_id == TYPE_F32) {
+        return 5;
+    } else if (type_id == TYPE_F64) {
+        return 9;
+    } else if (type_id == TYPE_STRING) {
+        return 1 + 2 + data.byte_length + 1; // type + len(2) + bytes + null
+    } else if (type_id == TYPE_BUFFER) {
+        return 1 + 1 + data.length; // type + len(1) + bytes
+    }
+    return 1; // TYPE_UNDEFINED: just the type byte
+}
+
+// Write a typed data element directly into buf at the given offset
+// Returns: number of bytes written
+export fn write_data_to_buffer(buf, offset, type_id, data) {
+    buf.write_u8(offset, type_id);
+    offset = offset + 1;
+
+    if (type_id == TYPE_U8) {
+        buf.write_u8(offset, data);
+        return 2;
+    } else if (type_id == TYPE_U16) {
+        buf.write_u16_le(offset, data);
+        return 3;
+    } else if (type_id == TYPE_U32) {
+        buf.write_u32_le(offset, data);
+        return 5;
+    } else if (type_id == TYPE_S8) {
+        buf.write_i8(offset, data);
+        return 2;
+    } else if (type_id == TYPE_S16) {
+        buf.write_i16_le(offset, data);
+        return 3;
+    } else if (type_id == TYPE_S32) {
+        buf.write_i32_le(offset, data);
+        return 5;
+    } else if (type_id == TYPE_F32) {
+        buf.write_f32_le(offset, data);
+        return 5;
+    } else if (type_id == TYPE_F64) {
+        buf.write_f64_le(offset, data);
+        return 9;
+    } else if (type_id == TYPE_STRING) {
+        let byte_len = data.byte_length;
+        let str_len = byte_len + 1; // +1 for null terminator
+        buf.write_u16_le(offset, str_len);
+        memcpy(buffer_ptr(buf) + offset + 2, data.byte_ptr(), byte_len);
+        buf.write_u8(offset + 2 + byte_len, 0); // null terminator
+        return 1 + 2 + str_len; // type already written
+    } else if (type_id == TYPE_BUFFER) {
+        let buf_len = data.length;
+        buf.write_u8(offset, buf_len);
+        buf.write_bytes(offset + 1, data, buf_len);
+        return 1 + 1 + buf_len;
+    }
+
+    // TYPE_UNDEFINED
+    return 1;
 }
 
 // Parse a typed data value from a buffer at the given index
@@ -177,61 +209,37 @@ export fn parse_data_from_buffer(buf, index) {
     index = index + 1;
 
     if (type_id == TYPE_U8) {
-        return { data: buf[index], size: 1 };
+        return { data: buf.read_u8(index), size: 1 };
     } else if (type_id == TYPE_U16) {
-        let val = buf[index] | (buf[index + 1] << 8);
-        return { data: val, size: 2 };
+        return { data: buf.read_u16_le(index), size: 2 };
     } else if (type_id == TYPE_U32) {
-        let val = buf[index] | (buf[index + 1] << 8) | (buf[index + 2] << 16) | (buf[index + 3] << 24);
-        if (val < 0) {
-            val = val + 4294967296;
-        }
-        return { data: val, size: 4 };
+        return { data: buf.read_u32_le(index), size: 4 };
     } else if (type_id == TYPE_S8) {
-        let val = buf[index];
-        if (val >= 128) {
-            val = val - 256;
-        }
-        return { data: val, size: 1 };
+        return { data: buf.read_i8(index), size: 1 };
     } else if (type_id == TYPE_S16) {
-        let val = buf[index] | (buf[index + 1] << 8);
-        if (val >= 32768) {
-            val = val - 65536;
-        }
-        return { data: val, size: 2 };
+        return { data: buf.read_i16_le(index), size: 2 };
     } else if (type_id == TYPE_S32) {
-        let val = buf[index] | (buf[index + 1] << 8) | (buf[index + 2] << 16) | (buf[index + 3] << 24);
-        // val is already signed in hemlock's i32
-        return { data: val, size: 4 };
+        return { data: buf.read_i32_le(index), size: 4 };
     } else if (type_id == TYPE_F16 || type_id == TYPE_F32) {
-        // Read IEEE 754 f32 directly from buffer pointer
-        let val = ptr_read_f32(buffer_ptr(buf) + index);
-        let sz = size_map[type_id];
-        return { data: val, size: sz };
+        return { data: buf.read_f32_le(index), size: size_map[type_id] };
     } else if (type_id == TYPE_F64) {
-        // Read IEEE 754 f64 directly from buffer pointer
-        let val = ptr_read_f64(buffer_ptr(buf) + index);
-        return { data: val, size: 8 };
+        return { data: buf.read_f64_le(index), size: 8 };
     } else if (type_id == TYPE_STRING) {
-        let str_len = buf[index] | (buf[index + 1] << 8);
+        let str_len = buf.read_u16_le(index);
         index = index + 2;
         // Strip null terminator if present
         let str_end = str_len;
-        if (str_len > 0 && buf[index + str_len - 1] == 0) {
+        if (str_len > 0 && buf.read_u8(index + str_len - 1) == 0) {
             str_end = str_len - 1;
         }
-        // Zero-copy slice into source buffer, then convert to string
         let val = "";
         if (str_end > 0) {
             val = __string_from_bytes(buf.slice(index, index + str_end));
         }
         return { data: val, size: str_len + 2 };
     } else if (type_id == TYPE_BUFFER) {
-        let buf_len = buf[index];
-        index = index + 1;
-        // Zero-copy slice from source buffer
-        let result_buf = buf.slice(index, index + buf_len);
-        return { data: result_buf, size: buf_len + 1 };
+        let buf_len = buf.read_u8(index);
+        return { data: buf.read_bytes(index + 1, buf_len), size: buf_len + 1 };
     }
 
     // TYPE_UNDEFINED
