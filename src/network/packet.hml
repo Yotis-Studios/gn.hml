@@ -79,17 +79,14 @@ export fn Packet(net_id) {
             result[2] = nid & 0xFF;
             result[3] = (nid >> 8) & 0xFF;
 
-            // Copy data buffers
+            // Copy data buffers using memcpy for bulk transfer
+            let result_ptr = buffer_ptr(result);
             let offset = 4;
             i = 0;
             while (i < data_bufs.length) {
                 let dbuf = data_bufs[i];
-                let j = 0;
-                while (j < dbuf.length) {
-                    result[offset] = dbuf[j];
-                    offset = offset + 1;
-                    j = j + 1;
-                }
+                memcpy(result_ptr + offset, buffer_ptr(dbuf), dbuf.length);
+                offset = offset + dbuf.length;
                 i = i + 1;
             }
 

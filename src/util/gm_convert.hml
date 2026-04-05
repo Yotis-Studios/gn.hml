@@ -122,29 +122,14 @@ export fn create_buffer_from_data(data) {
     } else if (type_id == TYPE_F32) {
         let buf = buffer(5);
         buf[0] = type_id;
-        // Use ptr_write_f32 to get IEEE 754 bytes
-        let tmp = alloc(4);
-        ptr_write_f32(tmp, data);
-        buf[1] = tmp[0];
-        buf[2] = tmp[1];
-        buf[3] = tmp[2];
-        buf[4] = tmp[3];
-        free(tmp);
+        // Write IEEE 754 f32 directly into buffer via pointer
+        ptr_write_f32(buffer_ptr(buf) + 1, data);
         return buf;
     } else if (type_id == TYPE_F64) {
         let buf = buffer(9);
         buf[0] = type_id;
-        let tmp = alloc(8);
-        ptr_write_f64(tmp, data);
-        buf[1] = tmp[0];
-        buf[2] = tmp[1];
-        buf[3] = tmp[2];
-        buf[4] = tmp[3];
-        buf[5] = tmp[4];
-        buf[6] = tmp[5];
-        buf[7] = tmp[6];
-        buf[8] = tmp[7];
-        free(tmp);
+        // Write IEEE 754 f64 directly into buffer via pointer
+        ptr_write_f64(buffer_ptr(buf) + 1, data);
         return buf;
     } else if (type_id == TYPE_STRING) {
         let str_bytes = data.to_bytes();
@@ -155,12 +140,8 @@ export fn create_buffer_from_data(data) {
         // String length as LE u16
         buf[1] = str_len & 0xFF;
         buf[2] = (str_len >> 8) & 0xFF;
-        // Copy string bytes
-        let i = 0;
-        while (i < str_bytes.length) {
-            buf[3 + i] = str_bytes[i];
-            i = i + 1;
-        }
+        // Copy string bytes via memcpy
+        memcpy(buffer_ptr(buf) + 3, buffer_ptr(str_bytes), str_bytes.length);
         // Null terminator
         buf[3 + str_bytes.length] = 0;
         return buf;
@@ -170,11 +151,8 @@ export fn create_buffer_from_data(data) {
         let buf = buffer(1 + 1 + buf_len);
         buf[0] = type_id;
         buf[1] = buf_len;
-        let i = 0;
-        while (i < buf_len) {
-            buf[2 + i] = data[i];
-            i = i + 1;
-        }
+        // Copy buffer data via memcpy
+        memcpy(buffer_ptr(buf) + 2, buffer_ptr(data), buf_len);
         return buf;
     }
 
@@ -226,27 +204,13 @@ export fn parse_data_from_buffer(buf, index) {
         // val is already signed in hemlock's i32
         return { data: val, size: 4 };
     } else if (type_id == TYPE_F16 || type_id == TYPE_F32) {
-        let tmp = alloc(4);
-        tmp[0] = buf[index];
-        tmp[1] = buf[index + 1];
-        tmp[2] = buf[index + 2];
-        tmp[3] = buf[index + 3];
-        let val = ptr_read_f32(tmp);
-        free(tmp);
+        // Read IEEE 754 f32 directly from buffer pointer
+        let val = ptr_read_f32(buffer_ptr(buf) + index);
         let sz = size_map[type_id];
         return { data: val, size: sz };
     } else if (type_id == TYPE_F64) {
-        let tmp = alloc(8);
-        tmp[0] = buf[index];
-        tmp[1] = buf[index + 1];
-        tmp[2] = buf[index + 2];
-        tmp[3] = buf[index + 3];
-        tmp[4] = buf[index + 4];
-        tmp[5] = buf[index + 5];
-        tmp[6] = buf[index + 6];
-        tmp[7] = buf[index + 7];
-        let val = ptr_read_f64(tmp);
-        free(tmp);
+        // Read IEEE 754 f64 directly from buffer pointer
+        let val = ptr_read_f64(buffer_ptr(buf) + index);
         return { data: val, size: 8 };
     } else if (type_id == TYPE_STRING) {
         let str_len = buf[index] | (buf[index + 1] << 8);
@@ -256,24 +220,20 @@ export fn parse_data_from_buffer(buf, index) {
         if (str_len > 0 && buf[index + str_len - 1] == 0) {
             str_end = str_len - 1;
         }
-        // Build byte array for string conversion
-        let bytes = [];
-        let i = 0;
-        while (i < str_end) {
-            bytes.push(buf[index + i]);
-            i = i + 1;
+        // Copy string bytes via memcpy into temp buffer, then convert
+        let val = "";
+        if (str_end > 0) {
+            let tmp = buffer(str_end);
+            memcpy(buffer_ptr(tmp), buffer_ptr(buf) + index, str_end);
+            val = __string_from_bytes(tmp);
         }
-        let val = __string_from_bytes(bytes);
         return { data: val, size: str_len + 2 };
     } else if (type_id == TYPE_BUFFER) {
         let buf_len = buf[index];
         index = index + 1;
         let result_buf = buffer(buf_len);
-        let i = 0;
-        while (i < buf_len) {
-            result_buf[i] = buf[index + i];
-            i = i + 1;
-        }
+        // Copy buffer data via memcpy
+        memcpy(buffer_ptr(result_buf), buffer_ptr(buf) + index, buf_len);
         return { data: result_buf, size: buf_len + 1 };
     }
 
