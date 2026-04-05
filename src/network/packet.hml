@@ -56,6 +56,7 @@ export fn Packet(net_id) {
         build: fn() {
             // First pass: build all data buffers and calculate total size
             let data_bufs = [];
+            data_bufs.reserve(self.data.length);
             let total_data_size = 0;
             let i = 0;
             while (i < self.data.length) {

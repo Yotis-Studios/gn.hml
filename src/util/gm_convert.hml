@@ -132,18 +132,18 @@ export fn create_buffer_from_data(data) {
         ptr_write_f64(buffer_ptr(buf) + 1, data);
         return buf;
     } else if (type_id == TYPE_STRING) {
-        let str_bytes = data.to_bytes();
-        let str_len = str_bytes.length + 1; // +1 for null terminator
+        let byte_len = data.byte_length;
+        let str_len = byte_len + 1; // +1 for null terminator
         // type(1) + len(2) + data + null
         let buf = buffer(1 + 2 + str_len);
         buf[0] = type_id;
         // String length as LE u16
         buf[1] = str_len & 0xFF;
         buf[2] = (str_len >> 8) & 0xFF;
-        // Copy string bytes via memcpy
-        memcpy(buffer_ptr(buf) + 3, buffer_ptr(str_bytes), str_bytes.length);
+        // Copy string bytes directly from string memory (no to_bytes() alloc)
+        memcpy(buffer_ptr(buf) + 3, data.byte_ptr(), byte_len);
         // Null terminator
-        buf[3 + str_bytes.length] = 0;
+        buf[3 + byte_len] = 0;
         return buf;
     } else if (type_id == TYPE_BUFFER) {
         let buf_len = data.length;
@@ -220,20 +220,17 @@ export fn parse_data_from_buffer(buf, index) {
         if (str_len > 0 && buf[index + str_len - 1] == 0) {
             str_end = str_len - 1;
         }
-        // Copy string bytes via memcpy into temp buffer, then convert
+        // Zero-copy slice into source buffer, then convert to string
         let val = "";
         if (str_end > 0) {
-            let tmp = buffer(str_end);
-            memcpy(buffer_ptr(tmp), buffer_ptr(buf) + index, str_end);
-            val = __string_from_bytes(tmp);
+            val = __string_from_bytes(buf.slice(index, index + str_end));
         }
         return { data: val, size: str_len + 2 };
     } else if (type_id == TYPE_BUFFER) {
         let buf_len = buf[index];
         index = index + 1;
-        let result_buf = buffer(buf_len);
-        // Copy buffer data via memcpy
-        memcpy(buffer_ptr(result_buf), buffer_ptr(buf) + index, buf_len);
+        // Zero-copy slice from source buffer
+        let result_buf = buf.slice(index, index + buf_len);
         return { data: result_buf, size: buf_len + 1 };
     }
 
