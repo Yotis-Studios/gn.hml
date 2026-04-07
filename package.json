@@ -1,8 +1,8 @@
 {
-  "name": "enakamura/gn.hml",
+  "name": "Yotis-Studios/gn.hml",
   "version": "0.1.0",
-  "description": "",
-  "author": "",
+  "description": "WebSocket networking framework for Hemlock, port of gn.js",
+  "author": "Yotis Studios",
   "license": "MIT",
   "main": "src/index.hml",
   "dependencies": {},
