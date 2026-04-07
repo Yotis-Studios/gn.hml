@@ -1,0 +1,10 @@
+{
+  "name": "enakamura/gn.hml",
+  "version": "0.1.0",
+  "description": "",
+  "author": "",
+  "license": "MIT",
+  "main": "src/index.hml",
+  "dependencies": {},
+  "devDependencies": {}
+}
