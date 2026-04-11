@@ -61,6 +61,7 @@ export fn Client() {
         _ws: null,
         _connected: false,
         _event_ch: null,
+        _recv_task: null,
         _on_connect: null,
         _on_packet: null,
         _on_disconnect: null,
@@ -80,7 +81,7 @@ export fn Client() {
                 self._ws = WebSocket(url);
                 self._connected = true;
                 self._event_ch = channel(256);
-                spawn(recv_loop, self._ws, self._event_ch);
+                self._recv_task = spawn(recv_loop, self._ws, self._event_ch);
                 if (self._on_connect != null) {
                     self._on_connect();
                 }
@@ -158,9 +159,16 @@ export fn Client() {
         },
 
         disconnect: fn() {
+            self._connected = false;
+            // Signal the recv loop to stop by marking the ws as closed,
+            // then join the task so it is no longer touching the
+            // underlying C connection memory before we free it.
             if (self._ws != null) {
-                self._connected = false;
                 self._ws.close();
+            }
+            if (self._recv_task != null) {
+                try { join(self._recv_task); } catch (e) { }
+                self._recv_task = null;
             }
             if (self._event_ch != null) {
                 self._event_ch.send({ type: "disconnect" });

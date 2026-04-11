@@ -87,6 +87,7 @@ export fn Server() {
     return {
         _connections: [],
         _conn_map: [],
+        _recv_tasks: [],
         _ws_server: null,
         _port: null,
         _closed: false,
@@ -150,7 +151,8 @@ export fn Server() {
                     self._connections.push(connection);
                     self._conn_map.push({ id: conn_id, conn: connection });
 
-                    spawn(connection_recv_loop, event.ws_conn, conn_id, self._event_ch);
+                    let recv_task = spawn(connection_recv_loop, event.ws_conn, conn_id, self._event_ch);
+                    self._recv_tasks.push(recv_task);
 
                     if (self._on_connect != null) {
                         self._on_connect(connection);
@@ -229,19 +231,30 @@ export fn Server() {
             if (self._event_ch != null) {
                 self._event_ch.send({ type: "shutdown" });
             }
-            // Kick all client connections
+            // Kick all client connections (sets ws_conn.closed = true)
             let i = 0;
             while (i < self._connections.length) {
                 self._connections[i].kick();
                 i = i + 1;
             }
+            // Wait for all recv loop tasks to finish before destroying
+            // the server. Recv loops check ws_conn.closed and exit, but
+            // we must join them so they are no longer touching the
+            // underlying C connection/server memory when we free it.
+            i = 0;
+            while (i < self._recv_tasks.length) {
+                try { join(self._recv_tasks[i]); } catch (e) { }
+                i = i + 1;
+            }
+            self._recv_tasks = [];
             // Signal accept loop to stop and wait for it
             if (self._stop_ch != null) {
                 self._stop_ch.send("stop");
                 // Wait for accept loop to acknowledge (up to 2s)
                 select([self._stop_ch], 2000);
             }
-            // Now safe to close the ws server
+            // Now safe to close the ws server - all tasks that touched
+            // ws_conn handles have been joined, so no use-after-free.
             if (self._ws_server != null) {
                 self._ws_server.close();
                 print("Server on port " + self._port + " closed");
