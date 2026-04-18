@@ -58,9 +58,11 @@ example/
   pingpong.hml           - ping-pong exchange demo
   multiclient.hml        - 3 concurrent clients demo
 test/
-  gm_convert_test.hml    - 34 tests for binary conversion
-  packet_test.hml        - 10 tests for packet serialization
+  gm_convert_test.hml    - 45 tests for binary conversion
+  packet_test.hml        - 13 tests for packet serialization
   server_client_test.hml - 5 integration tests
+  server_advanced_test.hml - 4 tests: callbacks, multi-client, broadcast
+  network_types_test.hml - 4 tests: floats, negatives, u32, client run()
 ```
 
 ## Running
@@ -72,6 +74,8 @@ hemlock example/echo.hml
 hemlock test/gm_convert_test.hml
 hemlock test/packet_test.hml
 hemlock test/server_client_test.hml
+hemlock test/server_advanced_test.hml
+hemlock test/network_types_test.hml
 ```
 
 ## Hemlock Quirks Found During Development

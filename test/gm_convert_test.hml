@@ -31,7 +31,15 @@ test("s16 for -129", fn() { assert(determine_type(-129) == 4); });
 test("s16 for -32768", fn() { assert(determine_type(-32768) == 4); });
 test("s32 for -32769", fn() { assert(determine_type(-32769) == 5); });
 test("f32 for 3.14", fn() { assert(determine_type(3.14) == 7); });
+test("f32 for negative float", fn() { assert(determine_type(-1.5) == 7); });
+test("f64 for huge float", fn() { assert(determine_type(99999999999.0) == 8); });
+test("u32 for 4294967295", fn() { assert(determine_type(4294967295) == 2); });
+test("s32 for -2147483648", fn() { assert(determine_type(-2147483648) == 5); });
 test("string", fn() { assert(determine_type("hello") == 9); });
+test("buffer type", fn() {
+    let b = buffer(2);
+    assert(determine_type(b) == 10);
+});
 test("undefined for null", fn() { assert(determine_type(null) == 11); });
 
 // ===== Roundtrip tests =====
@@ -62,6 +70,9 @@ roundtrip("s32: -32769", -32769);
 roundtrip("string: hello", "hello");
 roundtrip("string: empty", "");
 
+roundtrip("u32: 4294967295", 4294967295);
+roundtrip("s32: -2147483648", -2147483648);
+
 // Float roundtrip (approximate comparison needed)
 test("f32: 3.14", fn() {
     let buf = create_buffer_from_data(3.14);
@@ -71,11 +82,39 @@ test("f32: 3.14", fn() {
     assert(diff < 0.001, "Expected ~3.14 got " + result.data);
 });
 
+test("f32: negative float -1.5", fn() {
+    let buf = create_buffer_from_data(-1.5);
+    let result = parse_data_from_buffer(buf, 0);
+    let diff = result.data - (-1.5);
+    if (diff < 0) { diff = 0 - diff; }
+    assert(diff < 0.001, "Expected ~-1.5 got " + result.data);
+});
+
+test("f64: large float", fn() {
+    let val = 99999999999.0;
+    let buf = create_buffer_from_data(val);
+    let result = parse_data_from_buffer(buf, 0);
+    let diff = result.data - val;
+    if (diff < 0) { diff = 0 - diff; }
+    assert(diff < 1.0, "Expected ~99999999999.0 got " + result.data);
+});
+
+test("f64: negative large float", fn() {
+    let val = -123456789.0;
+    let buf = create_buffer_from_data(val);
+    let result = parse_data_from_buffer(buf, 0);
+    let diff = result.data - val;
+    if (diff < 0) { diff = 0 - diff; }
+    assert(diff < 1.0, "Expected ~-123456789.0 got " + result.data);
+});
+
 test("null roundtrip", fn() {
     let buf = create_buffer_from_data(null);
     let result = parse_data_from_buffer(buf, 0);
     assert(result.data == null);
 });
+
+roundtrip("string: special chars", "hello\tworld\n!");
 
 // Buffer roundtrip
 test("buffer roundtrip", fn() {

@@ -1,0 +1,157 @@
+// Advanced integration tests - server callbacks, multi-client, broadcast
+// Run with: hemlock test/server_advanced_test.hml
+//
+// NOTE: Each test needs a 2s cooldown after server.close() to let
+// background threads from the previous server fully terminate.
+// Without this, accumulated threads can cause stack exhaustion.
+
+import { Server } from "../src/network/server.hml";
+import { Client } from "../src/network/client.hml";
+import { Packet } from "../src/network/packet.hml";
+import { sleep } from "@stdlib/time";
+
+let tests_passed = 0;
+let tests_failed = 0;
+
+async fn run_server(srv, p) {
+    srv.listen(p);
+}
+
+print("server callbacks:");
+
+// Test: on("connect") fires and can send packets to new clients
+try {
+    let server = Server();
+    server.on("connect", fn(conn) {
+        let welcome = Packet(99);
+        welcome.add(42);
+        conn.send(welcome);
+    });
+    spawn(run_server, server, 19801);
+    sleep(0.5);
+    let client = Client();
+    client.connect("127.0.0.1", 19801);
+    let welcome = client.recv_packet();
+    assert(welcome != null, "Should receive welcome");
+    assert(welcome.net_id == 99, "Welcome netId should be 99");
+    assert(welcome.get(0) == 42, "Welcome data should be 42");
+    client.disconnect();
+    sleep(0.3);
+    server.close();
+    sleep(2.0);
+    print("  pass: on connect sends welcome packet");
+    tests_passed = tests_passed + 1;
+} catch (e) {
+    print("  FAIL: on connect sends welcome packet - " + e);
+    tests_failed = tests_failed + 1;
+}
+
+// Test: on("connect") can track server state across connections
+try {
+    let server = Server();
+    let connection_count = 0;
+    server.on("connect", fn(conn) { connection_count = connection_count + 1; });
+    server.on("packet", fn(conn, pkt) {
+        let reply = Packet(1);
+        reply.add(connection_count);
+        conn.send(reply);
+    });
+    spawn(run_server, server, 19802);
+    sleep(0.5);
+    let c1 = Client();
+    let c2 = Client();
+    c1.connect("127.0.0.1", 19802);
+    sleep(0.3);
+    c2.connect("127.0.0.1", 19802);
+    sleep(0.3);
+    let p = Packet(1);
+    p.add(0);
+    c1.send(p);
+    let echo = c1.recv_packet();
+    assert(echo != null, "Should receive reply");
+    assert(echo.get(0) == 2, "Should see 2 connections");
+    c1.disconnect();
+    c2.disconnect();
+    sleep(0.3);
+    server.close();
+    sleep(2.0);
+    print("  pass: on connect tracks connection count");
+    tests_passed = tests_passed + 1;
+} catch (e) {
+    print("  FAIL: on connect tracks connection count - " + e);
+    tests_failed = tests_failed + 1;
+}
+
+print("");
+print("multi-client:");
+
+// Test: two clients get independent echo responses
+try {
+    let server = Server();
+    server.on("packet", fn(conn, pkt) { conn.send(pkt); });
+    spawn(run_server, server, 19803);
+    sleep(0.5);
+    let c1 = Client();
+    let c2 = Client();
+    c1.connect("127.0.0.1", 19803);
+    c2.connect("127.0.0.1", 19803);
+    sleep(0.3);
+    let p1 = Packet(1);
+    p1.add(111);
+    c1.send(p1);
+    let p2 = Packet(2);
+    p2.add(222);
+    c2.send(p2);
+    let e1 = c1.recv_packet();
+    let e2 = c2.recv_packet();
+    assert(e1.get(0) == 111, "Client 1 echo");
+    assert(e2.get(0) == 222, "Client 2 echo");
+    c1.disconnect();
+    c2.disconnect();
+    sleep(0.3);
+    server.close();
+    sleep(2.0);
+    print("  pass: two clients communicate independently");
+    tests_passed = tests_passed + 1;
+} catch (e) {
+    print("  FAIL: two clients communicate independently - " + e);
+    tests_failed = tests_failed + 1;
+}
+
+print("");
+print("broadcast:");
+
+// Test: broadcast sends to all connected clients except the sender
+try {
+    let server = Server();
+    server.on("packet", fn(conn, pkt) { conn.broadcast(pkt); });
+    spawn(run_server, server, 19804);
+    sleep(0.5);
+    let c1 = Client();
+    let c2 = Client();
+    c1.connect("127.0.0.1", 19804);
+    sleep(0.2);
+    c2.connect("127.0.0.1", 19804);
+    sleep(0.3);
+    let p = Packet(10);
+    p.add(999);
+    c1.send(p);
+    let e2 = c2.recv_packet();
+    assert(e2.get(0) == 999, "Broadcast value");
+    c1.disconnect();
+    c2.disconnect();
+    sleep(0.3);
+    server.close();
+    sleep(2.0);
+    print("  pass: broadcast sends to all except sender");
+    tests_passed = tests_passed + 1;
+} catch (e) {
+    print("  FAIL: broadcast sends to all except sender - " + e);
+    tests_failed = tests_failed + 1;
+}
+
+print("");
+print("========================================");
+print("Server Advanced Tests: " + tests_passed + " passed, " + tests_failed + " failed");
+print("========================================");
+assert(tests_failed == 0, "All tests should pass");
