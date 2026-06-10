@@ -147,6 +147,29 @@ test("undersized data ignored", fn() {
     assert(p.data.length == 0, "Should have no data from undersized buffer");
 });
 
+test("oversized payload throws", fn() {
+    // 17 strings x ~4KB each = ~69KB payload, over the u16 size field max
+    let big = "";
+    let i = 0;
+    while (i < 256) {
+        big = big + "0123456789abcdef";
+        i = i + 1;
+    }
+    let p = Packet(1);
+    i = 0;
+    while (i < 17) {
+        p.add(big);
+        i = i + 1;
+    }
+    let threw = false;
+    try {
+        p.build();
+    } catch (e) {
+        threw = true;
+    }
+    assert(threw, "payload > 65535 bytes should throw, not corrupt framing");
+});
+
 // ===== Summary =====
 print("");
 print("========================================");

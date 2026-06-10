@@ -68,6 +68,9 @@ export fn Packet(net_id) {
             }
 
             let payload_size = 2 + total_data_size; // 2 for netId
+            if (payload_size > 65535) {
+                throw "gn: packet payload too large for u16 size field (" + payload_size + " bytes, max 65535)";
+            }
 
             // Single allocation, single pass write
             let result = buffer(2 + payload_size);
