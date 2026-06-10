@@ -58,14 +58,14 @@ example/
   pingpong.hml           - ping-pong exchange demo
   multiclient.hml        - 3 concurrent clients demo
 test/
-  gm_convert_test.hml    - 34 tests for binary conversion
-  packet_test.hml        - 10 tests for packet serialization
+  gm_convert_test.hml    - 36 tests for binary conversion
+  packet_test.hml        - 11 tests for packet serialization
   server_client_test.hml - 5 integration tests
 ```
 
 ## Running
 
-Requires Hemlock 2.0.0+ (uses `@stdlib/websocket` module which requires `make stdlib` during Hemlock build).
+Requires Hemlock 2.7.0+ (uses `from_bytes` from `@stdlib/strings`, added in 2.7.0, and the `@stdlib/websocket` module which requires `make stdlib` during Hemlock build). Last verified against Hemlock 2.7.0: all tests and examples pass.
 
 ```bash
 hemlock example/echo.hml
@@ -78,8 +78,9 @@ hemlock test/server_client_test.hml
 
 - **Hemlock 2.0.0 moved 63 builtins to `@stdlib` modules.** Math, signal, net, process, fs, atomic, debug, and ffi functions now require explicit imports. This project's builtins (`alloc`, `free`, `ptr_write_f32`, `__string_from_bytes`, etc.) were NOT moved and remain available globally.
 - **`@stdlib/websocket` requires `make stdlib`** during Hemlock build to compile the libwebsockets C wrapper (`lws_wrapper.so`). Without it, WebSocket imports will fail at runtime.
-- **Object method syntax**: Use `name: fn() {}` not `fn name() {}` inside object literals. The latter is a parse error.
+- **Object method syntax**: Hemlock 2.7.0 added `fn name() {}` shorthand inside object literals; on 2.0.0–2.6.x it is a parse error. This codebase keeps the `name: fn() {}` spelling, which works everywhere.
 - **`select([ch], 0)` works** for non-blocking channel poll when data is already buffered. Works correctly with channels shared across tasks.
 - **WebSocket recv messages** arrive as `{ type: "binary", binary: <buffer> }` for binary data and `{ type: "close" }` for disconnections via `@stdlib/websocket`.
-- **Float serialization**: Uses `ptr_write_f32`/`ptr_read_f32` via temporary `alloc()` buffers to get IEEE 754 bytes. Native byte order matches the LE protocol on x86/ARM.
-- **String-to-bytes**: Use `str.to_bytes()` for UTF-8 buffer, `__string_from_bytes(array)` for reconstruction.
+- **Float serialization**: Uses the typed buffer methods (`write_f32_le`/`read_f32_le` etc.) for IEEE 754 bytes in protocol byte order.
+- **String-to-bytes**: Use `str.to_bytes()` for UTF-8 buffer, `from_bytes(src)` from `@stdlib/strings` for reconstruction (added in 2.7.0 as the documented replacement for the internal `__string_from_bytes` dunder).
+- **Length-field overflow**: Hemlock's `write_u16_le`/`write_u8` silently wrap out-of-range values (Node's `Buffer` throws). The library validates string/buffer/packet sizes against their length fields and throws, matching gn.js behavior.

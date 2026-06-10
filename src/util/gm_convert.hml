@@ -1,6 +1,8 @@
 // gm_convert.hml - Binary data type conversion for the gn.hml protocol
 // Hemlock port of gn.js gmConvert.js
 
+import { from_bytes } from "@stdlib/strings";
+
 let TYPE_U8 = 0;
 let TYPE_U16 = 1;
 let TYPE_U32 = 2;
@@ -110,6 +112,9 @@ export fn create_buffer_from_data(data) {
     } else if (type_id == TYPE_STRING) {
         let byte_len = data.byte_length;
         let str_len = byte_len + 1;
+        if (str_len > 65535) {
+            throw "gn: string too large for u16 length field (" + byte_len + " bytes, max 65534)";
+        }
         let buf = buffer(1 + 2 + str_len);
         buf.write_u8(0, type_id);
         buf.write_u16_le(1, str_len);
@@ -118,6 +123,9 @@ export fn create_buffer_from_data(data) {
         return buf;
     } else if (type_id == TYPE_BUFFER) {
         let buf_len = data.length;
+        if (buf_len > 255) {
+            throw "gn: buffer too large for u8 length field (" + buf_len + " bytes, max 255)";
+        }
         let buf = buffer(1 + 1 + buf_len);
         buf.write_u8(0, type_id);
         buf.write_u8(1, buf_len);
@@ -180,12 +188,18 @@ export fn write_data_to_buffer(buf, offset, type_id, data) {
     } else if (type_id == TYPE_STRING) {
         let byte_len = data.byte_length;
         let str_len = byte_len + 1; // +1 for null terminator
+        if (str_len > 65535) {
+            throw "gn: string too large for u16 length field (" + byte_len + " bytes, max 65534)";
+        }
         buf.write_u16_le(offset, str_len);
         memcpy(buffer_ptr(buf) + offset + 2, data.byte_ptr(), byte_len);
         buf.write_u8(offset + 2 + byte_len, 0); // null terminator
         return 1 + 2 + str_len; // type already written
     } else if (type_id == TYPE_BUFFER) {
         let buf_len = data.length;
+        if (buf_len > 255) {
+            throw "gn: buffer too large for u8 length field (" + buf_len + " bytes, max 255)";
+        }
         buf.write_u8(offset, buf_len);
         buf.write_bytes(offset + 1, data, buf_len);
         return 1 + 1 + buf_len;
@@ -235,7 +249,7 @@ export fn parse_data_from_buffer(buf, index) {
         }
         let val = "";
         if (str_end > 0) {
-            val = __string_from_bytes(buf.slice(index, index + str_end));
+            val = from_bytes(buf.slice(index, index + str_end));
         }
         return { data: val, size: str_len + 2 };
     } else if (type_id == TYPE_BUFFER) {

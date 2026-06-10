@@ -144,6 +144,24 @@ test("invalid type returns null", fn() {
     assert(result.size == 0);
 });
 
+test("oversized buffer throws", fn() {
+    let big = buffer(256);
+    let threw = false;
+    try {
+        create_buffer_from_data(big);
+    } catch (e) {
+        threw = true;
+    }
+    assert(threw, "buffer > 255 bytes should throw, not wrap the u8 length field");
+});
+
+test("max-size buffer ok", fn() {
+    let big = buffer(255);
+    let buf = create_buffer_from_data(big);
+    let result = parse_data_from_buffer(buf, 0);
+    assert(result.data.length == 255);
+});
+
 // ===== Summary =====
 print("");
 print("========================================");

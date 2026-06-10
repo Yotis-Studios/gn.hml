@@ -6,7 +6,7 @@ Lightweight binary protocol with automatic type detection, designed for real-tim
 
 ## Requirements
 
-- Hemlock 2.0.0+ (build with `make && make stdlib` for WebSocket support)
+- Hemlock 2.7.0+ (build with `make && make stdlib` for WebSocket support)
 - libwebsockets (`brew install libwebsockets` / `apt install libwebsockets-dev`)
 
 ## Quick Start
