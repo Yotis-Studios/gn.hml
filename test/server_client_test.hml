@@ -186,6 +186,50 @@ test("large netId", fn() {
     }
 });
 
+test("batched packets in one message are all received", fn() {
+    let port = next_port();
+    let server = Server();
+    server.on("packet", fn(conn, packet) {
+        // Reply with TWO packets batched into a single binary message
+        let p1 = Packet(10);
+        p1.add("first");
+        let p2 = Packet(20);
+        p2.add("second");
+        let b1 = p1.build();
+        let b2 = p2.build();
+        let combined = buffer(b1.length + b2.length);
+        combined.write_bytes(0, b1, b1.length);
+        combined.write_bytes(b1.length, b2, b2.length);
+        conn.send(combined);
+    });
+    spawn(run_server, server, port);
+    sleep(0.5);
+
+    let client = Client();
+    try {
+        client.connect("127.0.0.1", port);
+
+        let p = Packet(1);
+        p.add(0);
+        client.send(p);
+
+        let first = client.recv_packet();
+        assert(first != null, "Should receive first packet");
+        assert(first.net_id == 10, "First netId should be 10");
+        assert(first.get(0) == "first", "First payload");
+
+        let second = client.recv_packet();
+        assert(second != null, "Should receive second (queued) packet");
+        assert(second.net_id == 20, "Second netId should be 20");
+        assert(second.get(0) == "second", "Second payload");
+    } finally {
+        client.disconnect();
+        sleep(0.3);
+        server.close();
+        sleep(0.3);
+    }
+});
+
 // ===== Summary =====
 print("");
 print("========================================");

@@ -42,8 +42,8 @@ export fn Packet(net_id) {
                 let i = 2;
                 while (i < data.length) {
                     let parse = parse_data_from_buffer(data, i);
-                    if (parse.size == 0 && parse.data == null) {
-                        break;
+                    if (!parse.valid) {
+                        break; // malformed/truncated element, stop parsing
                     }
                     self.data.push(parse.data);
                     i = i + parse.size + 1; // +1 for type byte
@@ -88,4 +88,23 @@ export fn Packet(net_id) {
             return result;
         },
     };
+}
+
+// Split a raw binary message into Packets.
+// Each packet on the wire is [2-byte LE size][payload]; a single WebSocket
+// message may carry several packets back to back.
+export fn parse_packets(data) {
+    let packets = [];
+    let offset = 0;
+    while (offset + 2 <= data.length) {
+        let size = data.read_u16_le(offset);
+        if (size == 0 || offset + 2 + size > data.length) {
+            break;
+        }
+        let packet = Packet(0);
+        packet.load(data.slice(offset + 2, offset + 2 + size)); // zero-copy view
+        packets.push(packet);
+        offset = offset + 2 + size;
+    }
+    return packets;
 }

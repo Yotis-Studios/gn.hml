@@ -4,9 +4,14 @@
 // listen() blocks the calling thread and runs an event loop that
 // dispatches connect/packet/disconnect events to registered callbacks.
 // Recv loops for each connection push events through a shared channel.
+//
+// spawn() deep-copies the server object but retains (shares) channels,
+// so the channels are created in the constructor: that is what lets
+// close() on the caller's copy reach the event loop running in the
+// spawned task's copy.
 
 import { WebSocketServer } from "@stdlib/websocket";
-import { Packet } from "./packet.hml";
+import { Packet, parse_packets } from "./packet.hml";
 import { Connection } from "./connection.hml";
 
 // Per-connection receive loop - pushes events onto shared channel
@@ -38,8 +43,10 @@ async fn connection_recv_loop(ws_conn, conn_id, event_ch) {
 }
 
 // Accept loop - pushes new connections onto shared channel
-// Uses a stop channel to know when to exit before ws_server.close()
-async fn accept_loop(ws_server, event_ch, stop_ch) {
+// stop_ch signals it to exit; the ack goes on a SEPARATE channel so the
+// teardown code cannot steal its own "stop" message off stop_ch and close
+// the ws server while this loop is still inside accept() (use-after-free).
+async fn accept_loop(ws_server, event_ch, stop_ch, stopped_ch) {
     while (true) {
         // Check if we should stop (non-blocking via select with 0 timeout)
         let stop = select([stop_ch], 0);
@@ -56,43 +63,23 @@ async fn accept_loop(ws_server, event_ch, stop_ch) {
         }
     }
     // Signal that we've stopped
-    stop_ch.send("stopped");
-}
-
-// Parse binary data into packets
-fn parse_packets(data) {
-    let packets = [];
-    let offset = 0;
-    while (offset + 2 <= data.length) {
-        let size = data[offset] | (data[offset + 1] << 8);
-        if (size == 0 || offset + 2 + size > data.length) {
-            break;
-        }
-        let payload = buffer(size);
-        let i = 0;
-        while (i < size) {
-            payload[i] = data[offset + 2 + i];
-            i = i + 1;
-        }
-        let packet = Packet(0);
-        packet.load(payload);
-        packets.push(packet);
-        offset = offset + 2 + size;
-    }
-    return packets;
+    stopped_ch.send("stopped");
 }
 
 // Create a new Server
 export fn Server() {
     return {
-        _connections: [],
-        _conn_map: [],
+        _conn_map: [], // { id, conn } entries for live connections
         _recv_tasks: [],
         _ws_server: null,
         _port: null,
         _closed: false,
-        _event_ch: null,
-        _stop_ch: null,
+        // Created here rather than in listen() so a close() from another
+        // task's deep copy of this object shares them (see header comment)
+        _event_ch: channel(256),
+        _stop_ch: channel(2),
+        _stopped_ch: channel(1),
+        _done_ch: channel(1),
         _next_conn_id: 0,
         _on_ready: null,
         _on_connect: null,
@@ -112,8 +99,6 @@ export fn Server() {
         // Register all callbacks with on() before calling this.
         listen: fn(port) {
             self._port = port;
-            self._event_ch = channel(256);
-            self._stop_ch = channel(2);
 
             try {
                 self._ws_server = WebSocketServer("0.0.0.0", port);
@@ -126,7 +111,7 @@ export fn Server() {
             }
 
             print("Server listening on port " + port);
-            spawn(accept_loop, self._ws_server, self._event_ch, self._stop_ch);
+            spawn(accept_loop, self._ws_server, self._event_ch, self._stop_ch, self._stopped_ch);
 
             if (self._on_ready != null) {
                 self._on_ready();
@@ -140,6 +125,7 @@ export fn Server() {
                 }
 
                 if (event.type == "shutdown") {
+                    self._closed = true;
                     break;
                 }
 
@@ -148,7 +134,6 @@ export fn Server() {
                     self._next_conn_id = self._next_conn_id + 1;
 
                     let connection = Connection(event.ws_conn, self);
-                    self._connections.push(connection);
                     self._conn_map.push({ id: conn_id, conn: connection });
 
                     let recv_task = spawn(connection_recv_loop, event.ws_conn, conn_id, self._event_ch);
@@ -191,14 +176,6 @@ export fn Server() {
                         i = i + 1;
                     }
                     if (connection != null) {
-                        i = 0;
-                        while (i < self._connections.length) {
-                            if (self._connections[i] == connection) {
-                                self._connections.remove(i);
-                                break;
-                            }
-                            i = i + 1;
-                        }
                         connection.code = 1000;
                         connection.message = "closed";
                         if (self._on_disconnect != null) {
@@ -207,6 +184,37 @@ export fn Server() {
                     }
                 }
             }
+
+            // Teardown runs here, on the task that owns _ws_server and the
+            // connection handles - close() may have been called on a
+            // different deep copy that can only reach us via _event_ch.
+            // Kick all client connections (sets ws_conn.closed = true)
+            let i = 0;
+            while (i < self._conn_map.length) {
+                self._conn_map[i].conn.kick();
+                i = i + 1;
+            }
+            // Join recv loop tasks so they are no longer touching the
+            // underlying C connection/server memory when we free it.
+            i = 0;
+            while (i < self._recv_tasks.length) {
+                try { join(self._recv_tasks[i]); } catch (e) { }
+                i = i + 1;
+            }
+            self._recv_tasks = [];
+            // Signal accept loop to stop and wait for its acknowledgement
+            // (worst case it is inside a 500ms accept() call)
+            self._stop_ch.send("stop");
+            select([self._stopped_ch], 2000);
+            // The server has now logically stopped: no event loop, no
+            // accept loop, all clients kicked and recv tasks joined.
+            // Acknowledge close() BEFORE freeing the OS resources -
+            // destroying the lws context blocks for many seconds in the
+            // current Hemlock runtime (lws_context_destroy stall), and
+            // callers should not have to wait for that.
+            self._done_ch.send("done");
+            self._ws_server.close();
+            print("Server on port " + self._port + " closed");
         },
 
         broadcast: fn(packet, exclude) {
@@ -217,47 +225,28 @@ export fn Server() {
                 data = packet;
             }
             let i = 0;
-            while (i < self._connections.length) {
-                if (self._connections[i] != exclude) {
-                    self._connections[i].send(data);
+            while (i < self._conn_map.length) {
+                if (self._conn_map[i].conn != exclude) {
+                    self._conn_map[i].conn.send(data);
                 }
                 i = i + 1;
             }
         },
 
+        // Stop the server: the event loop exits, all clients are kicked,
+        // and the accept loop stops before this returns (up to ~3s).
+        // The underlying socket/context is then freed asynchronously by
+        // the server task (slow in the current Hemlock runtime), so
+        // binding the same port again immediately may fail.
         close: fn() {
             self._closed = true;
-            // Unblock the event loop first
-            if (self._event_ch != null) {
-                self._event_ch.send({ type: "shutdown" });
-            }
-            // Kick all client connections (sets ws_conn.closed = true)
-            let i = 0;
-            while (i < self._connections.length) {
-                self._connections[i].kick();
-                i = i + 1;
-            }
-            // Wait for all recv loop tasks to finish before destroying
-            // the server. Recv loops check ws_conn.closed and exit, but
-            // we must join them so they are no longer touching the
-            // underlying C connection/server memory when we free it.
-            i = 0;
-            while (i < self._recv_tasks.length) {
-                try { join(self._recv_tasks[i]); } catch (e) { }
-                i = i + 1;
-            }
-            self._recv_tasks = [];
-            // Signal accept loop to stop and wait for it
-            if (self._stop_ch != null) {
-                self._stop_ch.send("stop");
-                // Wait for accept loop to acknowledge (up to 2s)
-                select([self._stop_ch], 2000);
-            }
-            // Now safe to close the ws server - all tasks that touched
-            // ws_conn handles have been joined, so no use-after-free.
-            if (self._ws_server != null) {
-                self._ws_server.close();
-                print("Server on port " + self._port + " closed");
+            // The event loop may be running in another task's deep copy of
+            // this object; the shared channel is the only way to reach it.
+            self._event_ch.send({ type: "shutdown" });
+            if (self._ws_server == null) {
+                // We are not the copy running listen(): wait until the
+                // event loop task confirms the server has stopped.
+                select([self._done_ch], 3000);
             }
         },
     };

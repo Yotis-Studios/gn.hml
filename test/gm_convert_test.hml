@@ -162,6 +162,106 @@ test("max-size buffer ok", fn() {
     assert(result.data.length == 255);
 });
 
+test("u32 max roundtrips", fn() {
+    let buf = create_buffer_from_data(4294967295);
+    assert(buf[0] == 2, "should serialize as u32");
+    let result = parse_data_from_buffer(buf, 0);
+    assert(result.size == 4, "u32 consumes 4 bytes");
+    // Hemlock 2.8.1 quirk: (u32 4294967295) == (integer literal) is false,
+    // so compare the string rendering instead
+    assert("" + result.data == "4294967295", "Expected 4294967295 got " + result.data);
+});
+
+test("integer above u32 max throws", fn() {
+    let threw = false;
+    try {
+        determine_type(4294967296);
+    } catch (e) {
+        threw = true;
+    }
+    assert(threw, "value > u32 max should throw, not wrap on write");
+});
+
+test("integer below s32 min throws", fn() {
+    let threw = false;
+    try {
+        determine_type(-2147483649);
+    } catch (e) {
+        threw = true;
+    }
+    assert(threw, "value < s32 min should throw, not wrap on write");
+});
+
+test("undefined is valid, unknown type is not", fn() {
+    let buf = buffer(1);
+    buf[0] = 11; // TYPE_UNDEFINED
+    let result = parse_data_from_buffer(buf, 0);
+    assert(result.valid == true, "undefined should parse as valid");
+    buf[0] = 99;
+    result = parse_data_from_buffer(buf, 0);
+    assert(result.valid == false, "unknown type should be invalid");
+});
+
+test("truncated fixed-size value is invalid, no throw", fn() {
+    let buf = buffer(2);
+    buf[0] = 2;    // TYPE_U32 needs 4 data bytes
+    buf[1] = 0xFF; // only 1 present
+    let result = parse_data_from_buffer(buf, 0);
+    assert(result.valid == false, "truncated u32 should be invalid");
+});
+
+test("truncated string is invalid, no throw", fn() {
+    let buf = buffer(3);
+    buf[0] = 9;  // TYPE_STRING
+    buf[1] = 10; // claims 10 bytes
+    buf[2] = 0;  // but none follow
+    let result = parse_data_from_buffer(buf, 0);
+    assert(result.valid == false, "truncated string should be invalid");
+});
+
+test("truncated buffer value is invalid, no throw", fn() {
+    let buf = buffer(2);
+    buf[0] = 10; // TYPE_BUFFER
+    buf[1] = 5;  // claims 5 bytes, none follow
+    let result = parse_data_from_buffer(buf, 0);
+    assert(result.valid == false, "truncated buffer should be invalid");
+});
+
+// ===== f16 decoding (2-byte IEEE 754 half, e.g. from GameMaker buffer_f16) =====
+print("");
+print("f16 decoding:");
+
+fn f16_test(name, bits, expected) {
+    test(name, fn() {
+        let buf = buffer(3);
+        buf[0] = 6; // TYPE_F16
+        buf.write_u16_le(1, bits);
+        let result = parse_data_from_buffer(buf, 0);
+        assert(result.size == 2, "f16 consumes 2 bytes, got " + result.size);
+        let diff = result.data - expected;
+        if (diff < 0) { diff = 0 - diff; }
+        assert(diff < 0.001, "Expected " + expected + " got " + result.data);
+    });
+}
+
+f16_test("f16: 1.5", 0x3E00, 1.5);
+f16_test("f16: -4.5", 0xC480, -4.5);
+f16_test("f16: 0", 0x0000, 0.0);
+f16_test("f16: 65504 (max)", 0x7BFF, 65504.0);
+f16_test("f16: subnormal 2^-24", 0x0001, 0.000000059604644775390625);
+
+test("f16 at end of buffer does not overread", fn() {
+    // Exactly 3 bytes: type + 2 data bytes. The old code read 4 bytes (f32).
+    let buf = buffer(3);
+    buf[0] = 6;
+    buf.write_u16_le(1, 0x3C00); // 1.0
+    let result = parse_data_from_buffer(buf, 0);
+    assert(result.valid == true, "f16 at buffer end should parse");
+    let diff = result.data - 1.0;
+    if (diff < 0) { diff = 0 - diff; }
+    assert(diff < 0.001, "Expected 1.0 got " + result.data);
+});
+
 // ===== Summary =====
 print("");
 print("========================================");

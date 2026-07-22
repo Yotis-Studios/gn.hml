@@ -58,14 +58,14 @@ example/
   pingpong.hml           - ping-pong exchange demo
   multiclient.hml        - 3 concurrent clients demo
 test/
-  gm_convert_test.hml    - 36 tests for binary conversion
-  packet_test.hml        - 11 tests for packet serialization
-  server_client_test.hml - 5 integration tests
+  gm_convert_test.hml    - 49 tests for binary conversion
+  packet_test.hml        - 14 tests for packet serialization
+  server_client_test.hml - 6 integration tests
 ```
 
 ## Running
 
-Requires Hemlock 2.7.0+ (uses `from_bytes` from `@stdlib/strings`, added in 2.7.0, and the `@stdlib/websocket` module which requires `make stdlib` during Hemlock build). Last verified against Hemlock 2.7.0: all tests and examples pass.
+Requires Hemlock 2.7.0+ (uses `from_bytes` from `@stdlib/strings`, added in 2.7.0, and the `@stdlib/websocket` module which requires `make stdlib` during Hemlock build). Last verified against Hemlock 2.8.1: all tests and examples pass.
 
 ```bash
 hemlock example/echo.hml
@@ -83,4 +83,9 @@ hemlock test/server_client_test.hml
 - **WebSocket recv messages** arrive as `{ type: "binary", binary: <buffer> }` for binary data and `{ type: "close" }` for disconnections via `@stdlib/websocket`.
 - **Float serialization**: Uses the typed buffer methods (`write_f32_le`/`read_f32_le` etc.) for IEEE 754 bytes in protocol byte order.
 - **String-to-bytes**: Use `str.to_bytes()` for UTF-8 buffer, `from_bytes(src)` from `@stdlib/strings` for reconstruction (added in 2.7.0 as the documented replacement for the internal `__string_from_bytes` dunder).
-- **Length-field overflow**: Hemlock's `write_u16_le`/`write_u8` silently wrap out-of-range values (Node's `Buffer` throws). The library validates string/buffer/packet sizes against their length fields and throws, matching gn.js behavior.
+- **Length-field overflow**: Hemlock's `write_u16_le`/`write_u8` silently wrap out-of-range values (Node's `Buffer` throws). The library validates string/buffer/packet sizes against their length fields and throws, matching gn.js behavior. The same applies to integer values: `determine_type` throws for values outside the u32/s32 range instead of letting `write_u32_le` wrap them.
+- **Channel sharing requires pre-spawn creation**: nested channels inside an object are shared across a `spawn()` deep copy, but only if they exist at spawn time. `Server()` creates `_event_ch`/`_stop_ch`/`_stopped_ch`/`_done_ch` in the constructor for exactly this reason — it is what makes `close()` on the caller's copy able to reach the event loop running in the task's copy. (Before this, `close()` was silently a no-op: the caller's copy had null channels.)
+- **`WebSocketServer.close()` stalls for seconds** (Hemlock 2.8.1): freeing the lws context takes ~4-5s for an idle server and ~20s+ once a client has connected (`lws_context_destroy` stall in the runtime, upstream issue). `Server.close()` therefore acknowledges once the server has *logically* stopped (event loop exited, clients kicked, accept loop stopped, ~1s) and lets the server task free the OS resources in the background. Rebinding the same port immediately after `close()` may fail.
+- **u32 vs literal comparison** (Hemlock 2.8.1): a `u32` value read via `read_u32_le` compares `false` against an equal integer literal (e.g. `read_u32_le(...) == 4294967295` is false even though both print as `4294967295`). Compare via string rendering or another same-typed value.
+- **f16 wire format**: values of type f16 (2 bytes, e.g. GameMaker's `buffer_f16`) are decoded manually in `parse_data_from_buffer` (Hemlock buffers have no `read_f16_le`). The library never *writes* f16 — `determine_type` picks f32/f64 — but decodes it for wire compat with gn.js/GameMaker peers.
+- **Malformed input safety**: `parse_data_from_buffer` returns `{ data, size, valid }`; `valid: false` marks unknown types and truncated data so `Packet.load` stops cleanly instead of an out-of-bounds buffer read throwing through the server event loop. `valid: true` with `data: null` is a legitimate undefined value — parsing continues past it.

@@ -59,7 +59,7 @@ p.build();           // Serialize to binary buffer
 p.load(buffer);      // Deserialize from binary buffer
 ```
 
-Supported types: integers (u8/u16/u32/s8/s16/s32), floats (f32/f64), strings, buffers, null.
+Supported types: integers (u8/u16/u32/s8/s16/s32), floats (f32/f64), strings, buffers, null. f16 is additionally decoded on receive (e.g. from GameMaker's `buffer_f16`).
 
 ### Server
 
@@ -72,7 +72,9 @@ server.on("disconnect", fn(connection) { });
 server.on("error", fn(err) { });
 server.listen(port);           // Blocks - run in a spawned task
 server.broadcast(packet, exclude);
-server.close();
+server.close();                // Stops the server (event loop, accept loop,
+                               // client connections); OS resources are freed
+                               // asynchronously afterwards
 ```
 
 `listen()` blocks the calling thread. Spawn it in a background task:
@@ -134,9 +136,9 @@ hemlock example/multiclient.hml
 ## Running Tests
 
 ```bash
-hemlock test/gm_convert_test.hml    # 34 tests - binary conversion
-hemlock test/packet_test.hml        # 10 tests - packet serialization
-hemlock test/server_client_test.hml #  5 tests - server/client integration
+hemlock test/gm_convert_test.hml    # 49 tests - binary conversion
+hemlock test/packet_test.hml        # 14 tests - packet serialization
+hemlock test/server_client_test.hml #  6 tests - server/client integration
 ```
 
 ## License

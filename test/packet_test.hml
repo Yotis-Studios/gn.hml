@@ -1,7 +1,7 @@
 // Tests for packet.hml - packet serialization
 // Run with: hemlock test/packet_test.hml
 
-import { Packet } from "../src/network/packet.hml";
+import { Packet, parse_packets } from "../src/network/packet.hml";
 
 let tests_passed = 0;
 let tests_failed = 0;
@@ -145,6 +145,54 @@ test("undersized data ignored", fn() {
     tiny[0] = 5;
     p.load(tiny);
     assert(p.data.length == 0, "Should have no data from undersized buffer");
+});
+
+test("null mid-packet does not truncate later values", fn() {
+    let p = Packet(3);
+    p.add(7);
+    p.add(null);
+    p.add(42);
+    let built = p.build();
+
+    let p2 = Packet(0);
+    p2.load(built.slice(2));
+    assert(p2.data.length == 3, "Should have 3 elements, got " + p2.data.length);
+    assert(p2.get(0) == 7, "First value");
+    assert(p2.get(1) == null, "Second value should be null");
+    assert(p2.get(2) == 42, "Third value should survive the null");
+});
+
+test("parse_packets splits a multi-packet buffer", fn() {
+    let a = Packet(1);
+    a.add(10);
+    let b = Packet(2);
+    b.add("two");
+    let ba = a.build();
+    let bb = b.build();
+
+    let combined = buffer(ba.length + bb.length);
+    combined.write_bytes(0, ba, ba.length);
+    combined.write_bytes(ba.length, bb, bb.length);
+
+    let packets = parse_packets(combined);
+    assert(packets.length == 2, "Should parse 2 packets, got " + packets.length);
+    assert(packets[0].net_id == 1, "First netId");
+    assert(packets[0].get(0) == 10, "First value");
+    assert(packets[1].net_id == 2, "Second netId");
+    assert(packets[1].get(0) == "two", "Second value");
+});
+
+test("parse_packets ignores trailing partial packet", fn() {
+    let a = Packet(1);
+    a.add(5);
+    let ba = a.build();
+    // Append a truncated second packet (size claims more than present)
+    let combined = buffer(ba.length + 3);
+    combined.write_bytes(0, ba, ba.length);
+    combined.write_u16_le(ba.length, 50); // claims 50-byte payload
+    let packets = parse_packets(combined);
+    assert(packets.length == 1, "Only the complete packet should parse");
+    assert(packets[0].get(0) == 5);
 });
 
 test("oversized payload throws", fn() {

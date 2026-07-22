@@ -2,6 +2,7 @@
 // Hemlock port of gn.js gmConvert.js
 
 import { from_bytes } from "@stdlib/strings";
+import { INF, NAN } from "@stdlib/math";
 
 let TYPE_U8 = 0;
 let TYPE_U16 = 1;
@@ -33,17 +34,19 @@ export fn determine_type(data) {
                 return TYPE_U8;
             } else if (data < 65536) {
                 return TYPE_U16;
-            } else {
+            } else if (data < 4294967296) {
                 return TYPE_U32;
             }
+            throw "gn: integer too large for u32 (" + data + ", max 4294967295)";
         } else {
             if (data > -129) {
                 return TYPE_S8;
             } else if (data > -32769) {
                 return TYPE_S16;
-            } else {
+            } else if (data > -2147483649) {
                 return TYPE_S32;
             }
+            throw "gn: integer too small for s32 (" + data + ", min -2147483648)";
         }
     } else if (t == TYPEID_F32 || t == TYPEID_F64) {
         // Float types
@@ -210,38 +213,76 @@ export fn write_data_to_buffer(buf, offset, type_id, data) {
 }
 
 // Parse a typed data value from a buffer at the given index
-// Returns: { data: <value>, size: <bytes consumed after type byte> }
+// Returns: { data: <value>, size: <bytes consumed after type byte>, valid: <bool> }
+// valid is false for malformed input (unknown type, truncated data) and
+// true otherwise — including TYPE_UNDEFINED, which is a legitimate value
+// that also has data == null and size == 0.
 export fn parse_data_from_buffer(buf, index) {
     if (index >= buf.length) {
-        return { data: null, size: 0 };
+        return { data: null, size: 0, valid: false };
     }
 
     let type_id = buf[index];
     if (type_id >= TYPE_COUNT) {
-        return { data: null, size: 0 };
+        return { data: null, size: 0, valid: false };
     }
 
     index = index + 1;
 
+    // All fixed-size types: reject truncated buffers instead of throwing
+    if (type_id <= TYPE_F64 && index + size_map[type_id] > buf.length) {
+        return { data: null, size: 0, valid: false };
+    }
+
     if (type_id == TYPE_U8) {
-        return { data: buf.read_u8(index), size: 1 };
+        return { data: buf.read_u8(index), size: 1, valid: true };
     } else if (type_id == TYPE_U16) {
-        return { data: buf.read_u16_le(index), size: 2 };
+        return { data: buf.read_u16_le(index), size: 2, valid: true };
     } else if (type_id == TYPE_U32) {
-        return { data: buf.read_u32_le(index), size: 4 };
+        return { data: buf.read_u32_le(index), size: 4, valid: true };
     } else if (type_id == TYPE_S8) {
-        return { data: buf.read_i8(index), size: 1 };
+        return { data: buf.read_i8(index), size: 1, valid: true };
     } else if (type_id == TYPE_S16) {
-        return { data: buf.read_i16_le(index), size: 2 };
+        return { data: buf.read_i16_le(index), size: 2, valid: true };
     } else if (type_id == TYPE_S32) {
-        return { data: buf.read_i32_le(index), size: 4 };
-    } else if (type_id == TYPE_F16 || type_id == TYPE_F32) {
-        return { data: buf.read_f32_le(index), size: size_map[type_id] };
+        return { data: buf.read_i32_le(index), size: 4, valid: true };
+    } else if (type_id == TYPE_F16) {
+        // IEEE 754 half-precision: 1 sign, 5 exponent, 10 mantissa bits
+        let bits = buf.read_u16_le(index);
+        let exp = (bits >> 10) & 31;
+        let mant = bits & 1023;
+        let val = 0.0;
+        if (exp == 31) {
+            if (mant == 0) { val = INF; } else { val = NAN; }
+        } else {
+            let scale = 0.00006103515625; // 2^-14 (subnormal scale)
+            if (exp > 0) {
+                mant = mant + 1024; // implicit leading bit
+                let e = exp - 1;
+                while (e > 0) {
+                    scale = scale * 2.0;
+                    e = e - 1;
+                }
+            }
+            val = mant * scale * 0.0009765625; // mantissa is in 1/1024 units
+        }
+        if ((bits >> 15) != 0) {
+            val = 0.0 - val;
+        }
+        return { data: val, size: 2, valid: true };
+    } else if (type_id == TYPE_F32) {
+        return { data: buf.read_f32_le(index), size: 4, valid: true };
     } else if (type_id == TYPE_F64) {
-        return { data: buf.read_f64_le(index), size: 8 };
+        return { data: buf.read_f64_le(index), size: 8, valid: true };
     } else if (type_id == TYPE_STRING) {
+        if (index + 2 > buf.length) {
+            return { data: null, size: 0, valid: false };
+        }
         let str_len = buf.read_u16_le(index);
         index = index + 2;
+        if (index + str_len > buf.length) {
+            return { data: null, size: 0, valid: false };
+        }
         // Strip null terminator if present
         let str_end = str_len;
         if (str_len > 0 && buf.read_u8(index + str_len - 1) == 0) {
@@ -251,12 +292,18 @@ export fn parse_data_from_buffer(buf, index) {
         if (str_end > 0) {
             val = from_bytes(buf.slice(index, index + str_end));
         }
-        return { data: val, size: str_len + 2 };
+        return { data: val, size: str_len + 2, valid: true };
     } else if (type_id == TYPE_BUFFER) {
+        if (index + 1 > buf.length) {
+            return { data: null, size: 0, valid: false };
+        }
         let buf_len = buf.read_u8(index);
-        return { data: buf.read_bytes(index + 1, buf_len), size: buf_len + 1 };
+        if (index + 1 + buf_len > buf.length) {
+            return { data: null, size: 0, valid: false };
+        }
+        return { data: buf.read_bytes(index + 1, buf_len), size: buf_len + 1, valid: true };
     }
 
     // TYPE_UNDEFINED
-    return { data: null, size: 0 };
+    return { data: null, size: 0, valid: true };
 }

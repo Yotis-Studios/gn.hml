@@ -6,7 +6,7 @@
 // recv_packet() to manually receive one packet at a time.
 
 import { WebSocket } from "@stdlib/websocket";
-import { Packet } from "./packet.hml";
+import { Packet, parse_packets } from "./packet.hml";
 
 // Background recv loop - pushes events to channel
 async fn recv_loop(ws, event_ch) {
@@ -32,29 +32,6 @@ async fn recv_loop(ws, event_ch) {
     event_ch.send({ type: "disconnect" });
 }
 
-// Parse packets from binary data
-fn parse_packets(data) {
-    let packets = [];
-    let offset = 0;
-    while (offset + 2 <= data.length) {
-        let size = data[offset] | (data[offset + 1] << 8);
-        if (size == 0 || offset + 2 + size > data.length) {
-            break;
-        }
-        let payload = buffer(size);
-        let i = 0;
-        while (i < size) {
-            payload[i] = data[offset + 2 + i];
-            i = i + 1;
-        }
-        let packet = Packet(0);
-        packet.load(payload);
-        packets.push(packet);
-        offset = offset + 2 + size;
-    }
-    return packets;
-}
-
 // Create a new Client
 export fn Client() {
     return {
@@ -62,6 +39,7 @@ export fn Client() {
         _connected: false,
         _event_ch: null,
         _recv_task: null,
+        _pending: [],
         _on_connect: null,
         _on_packet: null,
         _on_disconnect: null,
@@ -123,7 +101,12 @@ export fn Client() {
         },
 
         // Receive a single packet (blocking). Returns null on disconnect.
+        // A single WebSocket message may carry several packets; extras are
+        // queued and returned by subsequent calls.
         recv_packet: fn() {
+            if (self._pending.length > 0) {
+                return self._pending.remove(0);
+            }
             if (self._event_ch == null || !self._connected) {
                 return null;
             }
@@ -135,6 +118,11 @@ export fn Client() {
                 if (event.type == "data") {
                     let packets = parse_packets(event.binary);
                     if (packets.length > 0) {
+                        let i = 1;
+                        while (i < packets.length) {
+                            self._pending.push(packets[i]);
+                            i = i + 1;
+                        }
                         return packets[0];
                     }
                 } else if (event.type == "disconnect") {
