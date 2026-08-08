@@ -155,7 +155,14 @@ export fn Server() {
                     self._recv_tasks.push(recv_task);
 
                     if (self._on_connect != null) {
-                        self._on_connect(connection);
+                        try {
+                            self._on_connect(connection);
+                        } catch (e) {
+                            print("Error in connect handler: " + e);
+                            if (self._on_error != null) {
+                                self._on_error(e, connection);
+                            }
+                        }
                     }
 
                 } else if (event.type == "data") {
@@ -173,7 +180,14 @@ export fn Server() {
                         let j = 0;
                         while (j < packets.length) {
                             if (self._on_packet != null) {
-                                self._on_packet(connection, packets[j]);
+                                try {
+                                    self._on_packet(connection, packets[j]);
+                                } catch (e) {
+                                    print("Error in packet handler: " + e);
+                                    if (self._on_error != null) {
+                                        self._on_error(e, connection);
+                                    }
+                                }
                             }
                             j = j + 1;
                         }
@@ -202,7 +216,14 @@ export fn Server() {
                         connection.code = 1000;
                         connection.message = "closed";
                         if (self._on_disconnect != null) {
-                            self._on_disconnect(connection);
+                            try {
+                                self._on_disconnect(connection);
+                            } catch (e) {
+                                print("Error in disconnect handler: " + e);
+                                if (self._on_error != null) {
+                                    self._on_error(e, connection);
+                                }
+                            }
                         }
                     }
                 }
