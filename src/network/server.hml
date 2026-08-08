@@ -120,7 +120,10 @@ export fn Server() {
             } catch (e) {
                 print("Server error: " + e);
                 if (self._on_error != null) {
-                    self._on_error(e);
+                    // No specific connection caused a bind/listen failure --
+                    // pass null, matching connection.hml's (err, connection)
+                    // convention and connection.send()'s own _on_error call.
+                    self._on_error(e, null);
                 }
                 return;
             }
