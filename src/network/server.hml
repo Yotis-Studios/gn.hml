@@ -230,7 +230,7 @@ export fn Server() {
             }
         },
 
-        broadcast: fn(packet, exclude) {
+        broadcast: fn(packet, exclude?: null) {
             let data = null;
             if (typeof(packet) == "object" && packet.build != null) {
                 data = packet.build();
