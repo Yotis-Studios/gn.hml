@@ -1,6 +1,6 @@
 {
   "name": "Yotis-Studios/gn.hml",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "WebSocket networking framework for Hemlock, port of gn.js",
   "author": "Yotis Studios",
   "license": "MIT",
