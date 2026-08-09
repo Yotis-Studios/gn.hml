@@ -10,22 +10,57 @@ export fn Packet(net_id) {
         net_id: net_id,
         data: [],
 
+        // A BOOLEAN CANNOT REACH THE SERIALISER. determine_type lists TYPEID_BOOL with the
+        // integer types -- the intent was clearly to support it -- and then immediately does
+        // `if (data >= 0)`, which is a numeric comparison on a bool and throws "Binary operation
+        // requires numeric operands". So the encoder tried to support booleans and broke on them
+        // one line later.
+        //
+        // Normalising here rather than in determine_type fixes the writer too: write_u8 would
+        // have had the same problem with a bool once the type was decided.
+        //
+        // 1/0 is what the wire has always carried. The GameMaker client sends its own booleans
+        // this way and reads them back as truthy numbers, so nothing downstream changes.
+        //
+        // Found by pointing the real client at a real server: every settings packet before the
+        // first boolean went out fine, so this presented as a connection that opened and
+        // immediately closed rather than as a serialisation fault.
+        normalize_value: fn(v) {
+            if (typeof(v) == "bool") {
+                if (v) { return 1; }
+                return 0;
+            }
+            return v;
+        },
+
         // Push data to the packet (single value or array)
         add: fn(data) {
             let t = typeof(data);
             if (t == "array") {
                 let i = 0;
                 while (i < data.length) {
-                    self.data.push(data[i]);
+                    self.data.push(self.normalize_value(data[i]));
                     i = i + 1;
                 }
             } else {
-                self.data.push(data);
+                self.data.push(self.normalize_value(data));
             }
         },
 
-        // Access data at index i
+        // Access data at index i.
+        //
+        // OUT OF RANGE RETURNS NULL rather than throwing, which is what every caller was written
+        // against: this is a port of gn.js, where `data[i]` past the end is undefined.
+        //
+        // Packets are genuinely shorter than their handlers expect, and legitimately so. The
+        // GameMaker client drops trailing values it has nothing to say about -- a player who has
+        // never customised sends PLAYER_CUSTOM with four values instead of five -- so a handler
+        // reading get(4) threw "Array index 4 out of bounds" on a perfectly ordinary packet from
+        // a brand new player.
         get: fn(i) {
+            if (i < 0 || i >= self.data.length) {
+                return null;
+            }
             return self.data[i];
         },
 
