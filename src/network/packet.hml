@@ -47,8 +47,20 @@ export fn Packet(net_id) {
             }
         },
 
-        // Access data at index i
+        // Access data at index i.
+        //
+        // OUT OF RANGE RETURNS NULL rather than throwing, which is what every caller was written
+        // against: this is a port of gn.js, where `data[i]` past the end is undefined.
+        //
+        // Packets are genuinely shorter than their handlers expect, and legitimately so. The
+        // GameMaker client drops trailing values it has nothing to say about -- a player who has
+        // never customised sends PLAYER_CUSTOM with four values instead of five -- so a handler
+        // reading get(4) threw "Array index 4 out of bounds" on a perfectly ordinary packet from
+        // a brand new player.
         get: fn(i) {
+            if (i < 0 || i >= self.data.length) {
+                return null;
+            }
             return self.data[i];
         },
 
