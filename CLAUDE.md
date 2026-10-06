@@ -21,7 +21,7 @@ Hemlock deep-copies all arguments passed to `spawn()`. This means:
 
 This fundamentally prevents the Node.js EventEmitter pattern where callbacks mutate shared state. The architecture differs from gn.js:
 
-- **Server**: `listen()` blocks the calling thread and runs an internal event loop (reads from a channel fed by background accept/recv tasks). Spawn it in a background task. Server-side callbacks (on packet, on connect) run inside the server's event loop and CAN access the server's own state (connections, etc.) since they execute on the same thread.
+- **Server**: `listen()` blocks the calling thread and runs an internal event loop (reads from a channel fed by background accept/recv tasks). Spawn it in a background task. Because `spawn()` copies the server, the event/done channels are created in `Server()` (channels are shared, not copied) so `close()` on the caller's copy can signal the listening task, which runs `_shutdown()` and closes `_done_ch`. Server-side callbacks (on packet, on connect) run inside the server's event loop and CAN access the server's own state (connections, etc.) since they execute on the same thread.
 - **Client**: Uses `recv_packet()` for synchronous blocking receive on the main thread. The `on()` + `run()` callback API also works but only within the client's own event loop.
 
 ### Typical Usage Pattern
@@ -60,7 +60,7 @@ example/
 test/
   gm_convert_test.hml    - 59 tests for binary conversion
   packet_test.hml        - 19 tests for packet serialization
-  server_client_test.hml - 6 integration tests
+  server_client_test.hml - 9 integration tests
 ```
 
 ## Running
@@ -80,7 +80,7 @@ hemlock test/server_client_test.hml
 - **`@stdlib/websocket` requires `make stdlib`** during Hemlock build to compile the libwebsockets C wrapper (`lws_wrapper.so`). Without it, WebSocket imports will fail at runtime.
 - **Object method syntax**: Hemlock 2.7.0 added `fn name() {}` shorthand inside object literals; on 2.0.0–2.6.x it is a parse error. This codebase keeps the `name: fn() {}` spelling, which works everywhere.
 - **`select([ch], 0)` works** for non-blocking channel poll when data is already buffered. Works correctly with channels shared across tasks.
-- **WebSocket recv messages** arrive as `{ type: "binary", binary: <buffer> }` for binary data and `{ type: "close" }` for disconnections via `@stdlib/websocket`.
+- **WebSocket recv messages** arrive as `{ type: "binary", binary: <buffer> }` for binary data, `{ type: "text", data: <string> }` for text (reported as an error) and `{ type: "close" }` for disconnections. Close codes are not exposed, so `connection.code` is always 1000 via `@stdlib/websocket`.
 - **Float serialization**: Uses the typed buffer methods (`write_f32_le`/`read_f32_le` etc.) for IEEE 754 bytes in protocol byte order.
 - **String-to-bytes**: Use `str.to_bytes()` for UTF-8 buffer, `from_bytes(src)` from `@stdlib/strings` for reconstruction (added in 2.7.0 as the documented replacement for the internal `__string_from_bytes` dunder).
 - **Length-field overflow**: Hemlock's `write_u16_le`/`write_u8`/`write_u32_le`/`write_i32_le` silently wrap out-of-range values (Node's `Buffer` throws). The library validates string/buffer/packet sizes, integers (u32/s32 bounds) and `net_id` (u16) and throws, matching gn.js behavior.

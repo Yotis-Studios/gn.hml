@@ -59,7 +59,7 @@ p.build();           // Serialize to binary buffer
 p.load(buffer);      // Deserialize from binary buffer
 ```
 
-Supported types: integers (u8/u16/u32/s8/s16/s32), floats (f32/f64), strings, buffers, null.
+Supported types: integers (u8/u16/u32/s8/s16/s32), floats (f32/f64; f16 is decoded), strings, buffers, booleans (sent as u8 1/0), null. See gn.js's [PROTOCOL.md](https://github.com/Yotis-Studios/gn.js/blob/main/PROTOCOL.md) for the wire format.
 
 ### Server
 
@@ -69,11 +69,16 @@ server.on("ready", fn() { });
 server.on("connect", fn(connection) { });
 server.on("packet", fn(connection, packet) { });
 server.on("disconnect", fn(connection) { });
-server.on("error", fn(err) { });
+server.on("error", fn(err, connection) { }); // connection is null if none applies
 server.listen(port);           // Blocks - run in a spawned task
 server.broadcast(packet, exclude);
-server.close();
+server.close();                // Stop; safe from any task or callback
 ```
+
+`close()` can be called on the copy you passed to `spawn()`: it signals the
+listening task and waits until it has shut down. Calling it from inside a
+callback stops the server once the callback returns. Text (non-binary)
+messages are reported to the `error` callback.
 
 `listen()` blocks the calling thread. Spawn it in a background task:
 

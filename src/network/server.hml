@@ -25,6 +25,8 @@ async fn connection_recv_loop(ws_conn, conn_id, event_ch) {
             }
             if (msg.type == "binary") {
                 event_ch.send({ type: "data", conn_id: conn_id, binary: msg.binary });
+            } else if (msg.type == "text") {
+                event_ch.send({ type: "text", conn_id: conn_id, data: msg.data });
             }
         }
     } catch (e) {
@@ -83,6 +85,11 @@ fn parse_packets(data) {
 }
 
 // Create a new Server
+//
+// spawn() deep-copies the server, so the copy running listen() is not the
+// caller's copy. The channels are created here because channels are shared
+// across spawn rather than copied: close() on any copy signals the listening
+// task through _event_ch, and that task closes _done_ch once it has shut down.
 export fn Server() {
     return {
         _connections: [],
@@ -91,7 +98,8 @@ export fn Server() {
         _ws_server: null,
         _port: null,
         _closed: false,
-        _event_ch: null,
+        _event_ch: channel(256),
+        _done_ch: channel(1),
         _stop_ch: null,
         _next_conn_id: 0,
         _on_ready: null,
@@ -112,7 +120,6 @@ export fn Server() {
         // Register all callbacks with on() before calling this.
         listen: fn(port) {
             self._port = port;
-            self._event_ch = channel(256);
             self._stop_ch = channel(2);
 
             try {
@@ -125,6 +132,7 @@ export fn Server() {
                     // convention and connection.send()'s own _on_error call.
                     self._on_error(e, null);
                 }
+                self._done_ch.close();
                 return;
             }
 
@@ -196,6 +204,23 @@ export fn Server() {
                         }
                     }
 
+                } else if (event.type == "text") {
+                    // Text frames aren't part of the protocol; report them like gn.js
+                    let err = "Received non-binary data: " + event.data;
+                    print(err);
+                    let connection = null;
+                    let i = 0;
+                    while (i < self._conn_map.length) {
+                        if (self._conn_map[i].id == event.conn_id) {
+                            connection = self._conn_map[i].conn;
+                            break;
+                        }
+                        i = i + 1;
+                    }
+                    if (self._on_error != null) {
+                        self._on_error(err, connection);
+                    }
+
                 } else if (event.type == "disconnect") {
                     let connection = null;
                     let i = 0;
@@ -231,6 +256,7 @@ export fn Server() {
                     }
                 }
             }
+            self._shutdown();
         },
 
         broadcast: fn(packet, exclude?: null) {
@@ -249,12 +275,21 @@ export fn Server() {
             }
         },
 
+        // Stop the server. Safe to call from any task (including the one that
+        // spawned listen()) and from inside a callback; repeat calls are no-ops.
+        // From another task it blocks until the listening task has shut down.
         close: fn() {
-            self._closed = true;
-            // Unblock the event loop first
-            if (self._event_ch != null) {
-                self._event_ch.send({ type: "shutdown" });
+            self._event_ch.send({ type: "shutdown" });
+            // The copy running listen() owns the socket; waiting for itself
+            // from inside a callback would deadlock
+            if (self._ws_server == null) {
+                select([self._done_ch], 5000);
             }
+        },
+
+        // Runs on the listening task once the event loop exits
+        _shutdown: fn() {
+            self._closed = true;
             // Kick all client connections (sets ws_conn.closed = true)
             let i = 0;
             while (i < self._connections.length) {
@@ -272,17 +307,14 @@ export fn Server() {
             }
             self._recv_tasks = [];
             // Signal accept loop to stop and wait for it
-            if (self._stop_ch != null) {
-                self._stop_ch.send("stop");
-                // Wait for accept loop to acknowledge (up to 2s)
-                select([self._stop_ch], 2000);
-            }
+            self._stop_ch.send("stop");
+            // Wait for accept loop to acknowledge (up to 2s)
+            select([self._stop_ch], 2000);
             // Now safe to close the ws server - all tasks that touched
             // ws_conn handles have been joined, so no use-after-free.
-            if (self._ws_server != null) {
-                self._ws_server.close();
-                print("Server on port " + self._port + " closed");
-            }
+            self._ws_server.close();
+            print("Server on port " + self._port + " closed");
+            self._done_ch.close();
         },
     };
 }

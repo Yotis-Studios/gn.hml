@@ -223,6 +223,71 @@ test("recv_packet returns every packet in a multi-packet message", fn() {
     }
 });
 
+test("close() from the spawning task stops the server", fn() {
+    let port = next_port();
+    let server = Server();
+    server.on("packet", fn(conn, packet) {
+        conn.send(packet);
+    });
+    let task = spawn(run_server, server, port);
+    sleep(0.5);
+
+    server.close();
+    join(task); // listen() must have returned
+
+    let client = Client();
+    client.connect("127.0.0.1", port);
+    assert(!client.is_connected(), "server should no longer accept connections");
+    server.close(); // second close is a no-op
+});
+
+test("close() from inside a callback stops the server", fn() {
+    let port = next_port();
+    let server = Server();
+    server.on("packet", fn(conn, packet) {
+        conn.send(packet);
+        conn.server.close();
+    });
+    let task = spawn(run_server, server, port);
+    sleep(0.5);
+
+    let client = Client();
+    try {
+        client.connect("127.0.0.1", port);
+        client.send(Packet(1));
+        assert(client.recv_packet() != null, "should get echo before close");
+        join(task);
+    } finally {
+        client.disconnect();
+    }
+});
+
+test("text message is reported as an error", fn() {
+    let port = next_port();
+    let server = Server();
+    server.on("error", fn(err, conn) {
+        // reply so the client can observe that the error fired with a connection
+        let p = Packet(77);
+        p.add(err);
+        conn.send(p);
+    });
+    spawn(run_server, server, port);
+    sleep(0.5);
+
+    let client = Client();
+    try {
+        client.connect("127.0.0.1", port);
+        client._ws.send_text("hello");
+        let reply = client.recv_packet();
+        assert(reply != null && reply.net_id == 77, "error handler should fire");
+        assert(reply.get(0) == "Received non-binary data: hello", "got: " + reply.get(0));
+    } finally {
+        client.disconnect();
+        sleep(0.3);
+        server.close();
+    }
+});
+
 // ===== Summary =====
 print("");
 print("========================================");
