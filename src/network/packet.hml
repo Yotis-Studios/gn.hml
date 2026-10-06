@@ -77,8 +77,8 @@ export fn Packet(net_id) {
                 let i = 2;
                 while (i < data.length) {
                     let parse = parse_data_from_buffer(data, i);
-                    if (parse.size == 0 && parse.data == null) {
-                        break;
+                    if (parse.size < 0) {
+                        break; // malformed or truncated, stop parsing
                     }
                     self.data.push(parse.data);
                     i = i + parse.size + 1; // +1 for type byte

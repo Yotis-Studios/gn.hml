@@ -58,8 +58,8 @@ example/
   pingpong.hml           - ping-pong exchange demo
   multiclient.hml        - 3 concurrent clients demo
 test/
-  gm_convert_test.hml    - 36 tests for binary conversion
-  packet_test.hml        - 15 tests for packet serialization
+  gm_convert_test.hml    - 59 tests for binary conversion
+  packet_test.hml        - 19 tests for packet serialization
   server_client_test.hml - 6 integration tests
 ```
 

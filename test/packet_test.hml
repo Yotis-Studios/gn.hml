@@ -170,6 +170,44 @@ test("oversized payload throws", fn() {
     assert(threw, "payload > 65535 bytes should throw, not corrupt framing");
 });
 
+// ===== Load robustness =====
+print("load robustness:");
+
+fn load_bytes(arr) {
+    let b = buffer(arr.length);
+    let i = 0;
+    while (i < arr.length) { b[i] = arr[i]; i = i + 1; }
+    let p = Packet(0);
+    p.load(b);
+    return p;
+}
+
+test("undefined in the middle does not truncate the packet", fn() {
+    let p = Packet(1);
+    p.add([1, null, 2, "x"]);
+    let b = p.build();
+    let q = Packet(0);
+    q.load(b.slice(2, b.length));
+    assert(q.data.length == 4, "expected 4 values, got " + q.data.length);
+    assert(q.get(0) == 1 && q.get(1) == null && q.get(2) == 2 && q.get(3) == "x");
+});
+
+test("truncated data keeps values before it and does not throw", fn() {
+    let q = load_bytes([1, 0, 0, 7, 1, 5]);
+    assert(q.net_id == 1);
+    assert(q.data.length == 1 && q.get(0) == 7);
+});
+
+test("string with length past the end does not throw", fn() {
+    let q = load_bytes([1, 0, 9, 255, 255, 97]);
+    assert(q.data.length == 0);
+});
+
+test("f16 followed by more data parses", fn() {
+    let q = load_bytes([1, 0, 6, 0, 60, 0, 7]);
+    assert(q.data.length == 2 && q.get(0) == 1.0 && q.get(1) == 7);
+});
+
 // ===== Range checks (match gn.js, where Buffer throws RangeError) =====
 print("range checks:");
 
