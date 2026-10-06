@@ -186,6 +186,43 @@ test("large netId", fn() {
     }
 });
 
+test("recv_packet returns every packet in a multi-packet message", fn() {
+    let port = next_port();
+    let server = Server();
+    server.on("packet", fn(conn, packet) {
+        let a = Packet(1);
+        a.add(10);
+        let b = Packet(2);
+        b.add(20);
+        let ba = a.build();
+        let bb = b.build();
+        let both = buffer(ba.length + bb.length);
+        let i = 0;
+        while (i < ba.length) { both[i] = ba[i]; i = i + 1; }
+        let j = 0;
+        while (j < bb.length) { both[i + j] = bb[j]; j = j + 1; }
+        conn.send(both);
+    });
+    spawn(run_server, server, port);
+    sleep(0.5);
+
+    let client = Client();
+    try {
+        client.connect("127.0.0.1", port);
+        client.send(Packet(9));
+
+        let p1 = client.recv_packet();
+        let p2 = client.recv_packet();
+        assert(p1 != null && p1.net_id == 1 && p1.get(0) == 10, "first packet");
+        assert(p2 != null && p2.net_id == 2 && p2.get(0) == 20, "second packet should not be dropped");
+    } finally {
+        client.disconnect();
+        sleep(0.3);
+        server.close();
+        sleep(0.3);
+    }
+});
+
 // ===== Summary =====
 print("");
 print("========================================");

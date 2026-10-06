@@ -64,10 +64,22 @@ export fn determine_type(data) {
     return TYPE_UNDEFINED;
 }
 
+// Hemlock's write_u32_le/write_i32_le silently wrap out-of-range values where
+// Node's Buffer throws a RangeError; throw here so both ports agree.
+fn check_int_range(type_id, data) {
+    if (type_id == TYPE_U32 && data > 4294967295) {
+        throw "gn: integer " + data + " out of range for u32 (max 4294967295)";
+    }
+    if (type_id == TYPE_S32 && data < -2147483648) {
+        throw "gn: integer " + data + " out of range for s32 (min -2147483648)";
+    }
+}
+
 // Create a buffer from a single data value, prefixed with its type byte
 // Returns: buffer containing [type_byte, ...data_bytes]
 export fn create_buffer_from_data(data) {
     let type_id = determine_type(data);
+    check_int_range(type_id, data);
 
     if (type_id == TYPE_U8) {
         let buf = buffer(2);
@@ -158,6 +170,7 @@ export fn data_size(type_id, data) {
 // Write a typed data element directly into buf at the given offset
 // Returns: number of bytes written
 export fn write_data_to_buffer(buf, offset, type_id, data) {
+    check_int_range(type_id, data);
     buf.write_u8(offset, type_id);
     offset = offset + 1;
 
@@ -228,7 +241,10 @@ export fn parse_data_from_buffer(buf, index) {
     } else if (type_id == TYPE_U16) {
         return { data: buf.read_u16_le(index), size: 2 };
     } else if (type_id == TYPE_U32) {
-        return { data: buf.read_u32_le(index), size: 4 };
+        // Widen to i64: Hemlock 2.10.3 treats a u32 mixed with an i64 as signed 32-bit,
+        // so 4294967295 compared to/subtracted from i64 values behaves like -1.
+        let v: i64 = buf.read_u32_le(index);
+        return { data: v, size: 4 };
     } else if (type_id == TYPE_S8) {
         return { data: buf.read_i8(index), size: 1 };
     } else if (type_id == TYPE_S16) {

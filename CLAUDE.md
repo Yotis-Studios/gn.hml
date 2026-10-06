@@ -59,8 +59,8 @@ example/
   multiclient.hml        - 3 concurrent clients demo
 test/
   gm_convert_test.hml    - 36 tests for binary conversion
-  packet_test.hml        - 11 tests for packet serialization
-  server_client_test.hml - 5 integration tests
+  packet_test.hml        - 15 tests for packet serialization
+  server_client_test.hml - 6 integration tests
 ```
 
 ## Running
@@ -83,4 +83,5 @@ hemlock test/server_client_test.hml
 - **WebSocket recv messages** arrive as `{ type: "binary", binary: <buffer> }` for binary data and `{ type: "close" }` for disconnections via `@stdlib/websocket`.
 - **Float serialization**: Uses the typed buffer methods (`write_f32_le`/`read_f32_le` etc.) for IEEE 754 bytes in protocol byte order.
 - **String-to-bytes**: Use `str.to_bytes()` for UTF-8 buffer, `from_bytes(src)` from `@stdlib/strings` for reconstruction (added in 2.7.0 as the documented replacement for the internal `__string_from_bytes` dunder).
-- **Length-field overflow**: Hemlock's `write_u16_le`/`write_u8` silently wrap out-of-range values (Node's `Buffer` throws). The library validates string/buffer/packet sizes against their length fields and throws, matching gn.js behavior.
+- **Length-field overflow**: Hemlock's `write_u16_le`/`write_u8`/`write_u32_le`/`write_i32_le` silently wrap out-of-range values (Node's `Buffer` throws). The library validates string/buffer/packet sizes, integers (u32/s32 bounds) and `net_id` (u16) and throws, matching gn.js behavior.
+- **u32 mixed with i64 is treated as signed 32-bit** (Hemlock 2.10.3): `u32(4294967295) == 4294967295` is false and subtracting gives -4294967296. `parse_data_from_buffer` widens u32 reads to i64 to avoid this.

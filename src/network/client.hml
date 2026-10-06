@@ -62,6 +62,7 @@ export fn Client() {
         _connected: false,
         _event_ch: null,
         _recv_task: null,
+        _pending: [],
         _on_connect: null,
         _on_packet: null,
         _on_disconnect: null,
@@ -123,7 +124,12 @@ export fn Client() {
         },
 
         // Receive a single packet (blocking). Returns null on disconnect.
+        // A single message can carry several packets; extras are queued
+        // and returned by subsequent calls rather than dropped.
         recv_packet: fn() {
+            if (self._pending.length > 0) {
+                return self._pending.shift();
+            }
             if (self._event_ch == null || !self._connected) {
                 return null;
             }
@@ -135,6 +141,11 @@ export fn Client() {
                 if (event.type == "data") {
                     let packets = parse_packets(event.binary);
                     if (packets.length > 0) {
+                        let k = 1;
+                        while (k < packets.length) {
+                            self._pending.push(packets[k]);
+                            k = k + 1;
+                        }
                         return packets[0];
                     }
                 } else if (event.type == "disconnect") {
