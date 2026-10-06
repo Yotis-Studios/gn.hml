@@ -6,7 +6,7 @@
 // Recv loops for each connection push events through a shared channel.
 
 import { WebSocketServer } from "@stdlib/websocket";
-import { Packet } from "./packet.hml";
+import { parse_packets } from "./packet.hml";
 import { Connection } from "./connection.hml";
 
 // Per-connection receive loop - pushes events onto shared channel
@@ -59,29 +59,6 @@ async fn accept_loop(ws_server, event_ch, stop_ch) {
     }
     // Signal that we've stopped
     stop_ch.send("stopped");
-}
-
-// Parse binary data into packets
-fn parse_packets(data) {
-    let packets = [];
-    let offset = 0;
-    while (offset + 2 <= data.length) {
-        let size = data[offset] | (data[offset + 1] << 8);
-        if (size == 0 || offset + 2 + size > data.length) {
-            break;
-        }
-        let payload = buffer(size);
-        let i = 0;
-        while (i < size) {
-            payload[i] = data[offset + 2 + i];
-            i = i + 1;
-        }
-        let packet = Packet(0);
-        packet.load(payload);
-        packets.push(packet);
-        offset = offset + 2 + size;
-    }
-    return packets;
 }
 
 // Create a new Server

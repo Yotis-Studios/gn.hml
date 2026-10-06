@@ -75,6 +75,17 @@ fn check_int_range(type_id, data) {
     }
 }
 
+// NaN is always written as the canonical quiet NaN (00 00 00 00 00 00 f8 7f),
+// matching gn.js; 0.0/0.0 on x86 produces one with the sign bit set
+fn write_f64(buf, offset, data) {
+    if (data != data) {
+        buf.write_u32_le(offset, 0);
+        buf.write_u32_le(offset + 4, 2146959360); // 0x7ff80000
+        return;
+    }
+    buf.write_f64_le(offset, data);
+}
+
 // Create a buffer from a single data value, prefixed with its type byte
 // Returns: buffer containing [type_byte, ...data_bytes]
 export fn create_buffer_from_data(data) {
@@ -119,7 +130,7 @@ export fn create_buffer_from_data(data) {
     } else if (type_id == TYPE_F64) {
         let buf = buffer(9);
         buf.write_u8(0, type_id);
-        buf.write_f64_le(1, data);
+        write_f64(buf, 1, data);
         return buf;
     } else if (type_id == TYPE_STRING) {
         let byte_len = data.byte_length;
@@ -196,7 +207,7 @@ export fn write_data_to_buffer(buf, offset, type_id, data) {
         buf.write_f32_le(offset, data);
         return 5;
     } else if (type_id == TYPE_F64) {
-        buf.write_f64_le(offset, data);
+        write_f64(buf, offset, data);
         return 9;
     } else if (type_id == TYPE_STRING) {
         let byte_len = data.byte_length;

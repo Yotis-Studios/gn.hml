@@ -1,0 +1,170 @@
+// Runs gn.hml against the shared protocol conformance vectors.
+// test/vectors/protocol.json is copied from gn.js (test/vectors/protocol.json);
+// update it from there, never by hand.
+// Run with: hemlock test/vectors_test.hml
+
+import { Packet, parse_packets } from "../src/network/packet.hml";
+import { parse } from "@stdlib/json";
+import { read_file } from "@stdlib/fs";
+
+let tests_passed = 0;
+let tests_failed = 0;
+
+fn test(name, test_fn) {
+    try {
+        test_fn();
+        tests_passed = tests_passed + 1;
+    } catch (e) {
+        print("  FAIL: " + name + " - " + e);
+        tests_failed = tests_failed + 1;
+    }
+}
+
+// Tests are run from the repo root (hemlock test/vectors_test.hml)
+let vectors = parse(read_file("test/vectors/protocol.json"));
+
+fn hex_value(code) {
+    if (code >= 48 && code <= 57) { return code - 48; }   // 0-9
+    return code - 87;                                      // a-f
+}
+
+fn from_hex(hex) {
+    let n = hex.length >> 1;
+    if (n == 0) {
+        return buffer(1).slice(0, 0); // buffer(0) is not allowed
+    }
+    let src = hex.to_bytes();
+    let b = buffer(n);
+    let i = 0;
+    while (i < n) {
+        b[i] = hex_value(src[i * 2]) * 16 + hex_value(src[i * 2 + 1]);
+        i = i + 1;
+    }
+    return b;
+}
+
+let DIGITS = "0123456789abcdef";
+fn to_hex(b) {
+    let out = "";
+    let i = 0;
+    while (i < b.length) {
+        out = out + DIGITS.char_at(b[i] >> 4) + DIGITS.char_at(b[i] & 15);
+        i = i + 1;
+    }
+    return out;
+}
+
+fn special(v) {
+    if (v == "NaN") { return 0.0 / 0.0; }
+    if (v == "Infinity") { return 1.0 / 0.0; }
+    if (v == "-Infinity") { return -1.0 / 0.0; }
+    return v;
+}
+
+// encode-side value -> Hemlock value
+fn to_native(x) {
+    if (x.t == "int" || x.t == "bool") { return x.v; }
+    if (x.t == "float") { return special(x.v); }
+    if (x.t == "string") {
+        if (x?.repeat != null) { return x.repeat.repeat(x.count); }
+        return x.v;
+    }
+    if (x.t == "buffer") { return from_hex(x.hex); }
+    return null; // undefined
+}
+
+fn same_value(actual, d) {
+    if (d.type == "undefined") { return actual == null; }
+    if (d.type == "buffer") { return to_hex(actual) == d.hex; }
+    if (d.v == "NaN") { return actual != actual; }
+    let want = special(d.v);
+    if (actual == want) { return true; }
+    // Hemlock <= 2.10.3 parses JSON floats up to 1 ulp off (fixed on main by
+    // ca2dc5e9, unreleased), so allow that much for finite floats
+    if (typeof(want) == "f64" && want == want && want * 2.0 != want) {
+        let diff = actual - want;
+        if (diff < 0.0) { diff = -diff; }
+        let mag = want;
+        if (mag < 0.0) { mag = -mag; }
+        return diff <= mag * 0.000000000000001;
+    }
+    return false;
+}
+
+fn check_values(actual, decoded) {
+    assert(actual.length == decoded.length, "expected " + decoded.length + " values, got " + actual.length);
+    let i = 0;
+    while (i < decoded.length) {
+        assert(same_value(actual[i], decoded[i]), "value " + i + ": got " + actual[i]);
+        i = i + 1;
+    }
+}
+
+fn build(v) {
+    let p = Packet(v.netId);
+    let i = 0;
+    while (i < v.values.length) {
+        p.add(to_native(v.values[i]));
+        i = i + 1;
+    }
+    return p.build();
+}
+
+print("encode:");
+let i = 0;
+while (i < vectors.encode.length) {
+    let v = vectors.encode[i];
+    test(v.name, fn() {
+        let got = to_hex(build(v));
+        assert(got == v.hex, "got " + got);
+    });
+    i = i + 1;
+}
+
+print("encode errors:");
+i = 0;
+while (i < vectors.encode_errors.length) {
+    let v = vectors.encode_errors[i];
+    test(v.name, fn() {
+        let threw = false;
+        try { build(v); } catch (e) { threw = true; }
+        assert(threw, "should refuse to build");
+    });
+    i = i + 1;
+}
+
+print("decode:");
+i = 0;
+while (i < vectors.decode.length) {
+    let v = vectors.decode[i];
+    test(v.name, fn() {
+        let p = Packet(null);
+        p.load(from_hex(v.payload));
+        assert(p.net_id == v.netId, "netId " + p.net_id);
+        check_values(p.data, v.values);
+    });
+    i = i + 1;
+}
+
+print("frames:");
+i = 0;
+while (i < vectors.frames.length) {
+    let v = vectors.frames[i];
+    test(v.name, fn() {
+        let packets = parse_packets(from_hex(v.hex));
+        assert(packets.length == v.packets.length, "got " + packets.length + " packets");
+        let j = 0;
+        while (j < packets.length) {
+            assert(packets[j].net_id == v.packets[j].netId, "packet " + j + " netId");
+            check_values(packets[j].data, v.packets[j].values);
+            j = j + 1;
+        }
+    });
+    i = i + 1;
+}
+
+print("");
+print("========================================");
+print("Vector Tests: " + tests_passed + " passed, " + tests_failed + " failed");
+print("========================================");
+assert(tests_failed == 0, "All tests should pass");

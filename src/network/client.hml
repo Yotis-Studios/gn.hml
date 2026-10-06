@@ -6,7 +6,7 @@
 // recv_packet() to manually receive one packet at a time.
 
 import { WebSocket } from "@stdlib/websocket";
-import { Packet } from "./packet.hml";
+import { parse_packets } from "./packet.hml";
 
 // Background recv loop - pushes events to channel
 async fn recv_loop(ws, event_ch) {
@@ -30,29 +30,6 @@ async fn recv_loop(ws, event_ch) {
         // Connection was closed, exit gracefully
     }
     event_ch.send({ type: "disconnect" });
-}
-
-// Parse packets from binary data
-fn parse_packets(data) {
-    let packets = [];
-    let offset = 0;
-    while (offset + 2 <= data.length) {
-        let size = data[offset] | (data[offset + 1] << 8);
-        if (size == 0 || offset + 2 + size > data.length) {
-            break;
-        }
-        let payload = buffer(size);
-        let i = 0;
-        while (i < size) {
-            payload[i] = data[offset + 2 + i];
-            i = i + 1;
-        }
-        let packet = Packet(0);
-        packet.load(payload);
-        packets.push(packet);
-        offset = offset + 2 + size;
-    }
-    return packets;
 }
 
 // Create a new Client

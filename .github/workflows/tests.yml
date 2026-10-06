@@ -27,11 +27,14 @@ jobs:
         sudo cp -r stdlib /usr/local/lib/hemlock-stdlib
         sudo ln -s /usr/local/lib/hemlock-stdlib /usr/local/bin/stdlib
 
-    - name: Run unit tests - gm_convert (34 tests)
+    - name: Run unit tests - gm_convert
       run: hemlock test/gm_convert_test.hml
 
-    - name: Run unit tests - packet (10 tests)
+    - name: Run unit tests - packet
       run: hemlock test/packet_test.hml
+
+    - name: Run protocol conformance vectors
+      run: hemlock test/vectors_test.hml
 
   integration-tests:
     runs-on: ubuntu-latest

@@ -128,3 +128,21 @@ export fn Packet(net_id) {
         },
     };
 }
+
+// Split one WebSocket message into packets (PROTOCOL.md section 2).
+// Stops at a zero size or a size running past the end of the message.
+export fn parse_packets(data) {
+    let packets = [];
+    let offset = 0;
+    while (offset + 2 <= data.length) {
+        let size = data.read_u16_le(offset);
+        if (size == 0 || offset + 2 + size > data.length) {
+            break;
+        }
+        let packet = Packet(0);
+        packet.load(data.slice(offset + 2, offset + 2 + size));
+        packets.push(packet);
+        offset = offset + 2 + size;
+    }
+    return packets;
+}
