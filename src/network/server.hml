@@ -8,6 +8,7 @@
 import { WebSocketServer } from "@stdlib/websocket";
 import { parse_packets } from "./packet.hml";
 import { Connection } from "./connection.hml";
+import { time_ms } from "@stdlib/time";
 
 // Per-connection receive loop - pushes events onto shared channel
 async fn connection_recv_loop(ws_conn, conn_id, event_ch) {
@@ -61,6 +62,40 @@ async fn accept_loop(ws_server, event_ch, stop_ch) {
     stop_ch.send("stopped");
 }
 
+// Timer task - posts "timer" events for one every() registration
+//
+// Deadlines are absolute (start + k * ms), so the period does not drift with
+// scheduling delay. At most one event per timer is waiting on the event loop:
+// the task takes the token before posting and the loop gives it back after
+// the callback, so a slow loop is told how many periods passed instead of
+// receiving a queue of them.
+async fn timer_loop(timer_id, ms, event_ch, stop_ch, token_ch) {
+    let start = time_ms();
+    let elapsed = 0;   // periods that have passed
+    let posted = 0;    // periods already handed to the loop
+    while (true) {
+        let wait = start + (elapsed + 1) * ms - time_ms();
+        if (wait < 0) {
+            wait = 0;
+        }
+        if (select([stop_ch], wait) != null) {
+            break;
+        }
+        let now = time_ms();
+        while (start + (elapsed + 1) * ms <= now) {
+            elapsed = elapsed + 1;
+        }
+        if (elapsed > posted && select([token_ch], 0) != null) {
+            try {
+                event_ch.send({ type: "timer", timer_id: timer_id, periods: elapsed - posted });
+            } catch (e) {
+                break; // Channel closed
+            }
+            posted = elapsed;
+        }
+    }
+}
+
 // Create a new Server
 //
 // spawn() deep-copies the server, so the copy running listen() is not the
@@ -79,6 +114,9 @@ export fn Server() {
         _done_ch: channel(1),
         _stop_ch: null,
         _next_conn_id: 0,
+        _timers: [],
+        _next_timer_id: 0,
+        _listening: false,
         _on_ready: null,
         _on_connect: null,
         _on_packet: null,
@@ -91,6 +129,66 @@ export fn Server() {
             else if (event == "packet") { self._on_packet = callback; }
             else if (event == "disconnect") { self._on_disconnect = callback; }
             else if (event == "error") { self._on_error = callback; }
+        },
+
+        // Call fn(periods, server) on the event loop's thread every ms milliseconds,
+        // where periods is how many have passed since the last call (1 unless
+        // the loop fell behind; the caller decides how much to catch up).
+        // server is the listening copy (spawn() copies the one you hold), so
+        // broadcast() and the connection list there are the live ones.
+        // Register before listen(), or from inside a callback; a copy of the
+        // server in another task cannot add timers to a running loop.
+        // Returns an id for cancel().
+        every: fn(ms, callback) {
+            if (ms <= 0) {
+                throw "every(): ms must be positive, got " + ms;
+            }
+            let timer = {
+                id: self._next_timer_id,
+                ms: ms,
+                callback: callback,
+                stop_ch: channel(2),
+                token_ch: channel(1),
+                task: null,
+            };
+            self._next_timer_id = self._next_timer_id + 1;
+            self._timers.push(timer);
+            if (self._listening) {
+                self._start_timer(timer);
+            }
+            return timer.id;
+        },
+
+        // Stop a timer. From the listening task, or before listen().
+        cancel: fn(timer_id) {
+            let i = 0;
+            while (i < self._timers.length) {
+                if (self._timers[i].id == timer_id) {
+                    self._stop_timer(self._timers[i]);
+                    self._timers.remove(i);
+                    return true;
+                }
+                i = i + 1;
+            }
+            return false;
+        },
+
+        _start_timer: fn(timer) {
+            timer.token_ch.send("token");
+            timer.task = spawn(timer_loop, timer.id, timer.ms, self._event_ch, timer.stop_ch, timer.token_ch);
+        },
+
+        // Called on the loop's own thread, so it must not wait: the task may
+        // be blocked posting to the event channel this thread drains. It
+        // sees the stop at its next deadline; an event it already posted is
+        // dropped because the timer is no longer registered.
+        _stop_timer: fn(timer) {
+            if (timer.task == null) {
+                return;
+            }
+            timer.stop_ch.send("stop");
+            detach(timer.task);
+            timer.task = null;
         },
 
         // Start listening. BLOCKS the calling thread and runs the event loop.
@@ -116,6 +214,13 @@ export fn Server() {
             print("Server listening on port " + port);
             spawn(accept_loop, self._ws_server, self._event_ch, self._stop_ch);
 
+            self._listening = true;
+            let t = 0;
+            while (t < self._timers.length) {
+                self._start_timer(self._timers[t]);
+                t = t + 1;
+            }
+
             if (self._on_ready != null) {
                 self._on_ready();
             }
@@ -131,7 +236,30 @@ export fn Server() {
                     break;
                 }
 
-                if (event.type == "connect") {
+                if (event.type == "timer") {
+                    let timer = null;
+                    let i = 0;
+                    while (i < self._timers.length) {
+                        if (self._timers[i].id == event.timer_id) {
+                            timer = self._timers[i];
+                            break;
+                        }
+                        i = i + 1;
+                    }
+                    // A cancelled timer's last event can still be queued
+                    if (timer != null) {
+                        try {
+                            timer.callback(event.periods, self);
+                        } catch (e) {
+                            print("Error in timer handler: " + e);
+                            if (self._on_error != null) {
+                                self._on_error(e, null);
+                            }
+                        }
+                        timer.token_ch.send("token");
+                    }
+
+                } else if (event.type == "connect") {
                     let conn_id = self._next_conn_id;
                     self._next_conn_id = self._next_conn_id + 1;
 
@@ -267,6 +395,25 @@ export fn Server() {
         // Runs on the listening task once the event loop exits
         _shutdown: fn() {
             self._closed = true;
+            self._listening = false;
+            // Stop the timers and wait for them, draining their pending
+            // events so none is left blocked posting to the event channel
+            let t = 0;
+            while (t < self._timers.length) {
+                if (self._timers[t].task != null) {
+                    self._timers[t].stop_ch.send("stop");
+                }
+                t = t + 1;
+            }
+            while (select([self._event_ch], 0) != null) { }
+            t = 0;
+            while (t < self._timers.length) {
+                if (self._timers[t].task != null) {
+                    try { join(self._timers[t].task); } catch (e) { }
+                    self._timers[t].task = null;
+                }
+                t = t + 1;
+            }
             // Kick all client connections (sets ws_conn.closed = true)
             let i = 0;
             while (i < self._connections.length) {

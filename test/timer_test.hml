@@ -1,0 +1,232 @@
+// Tests for Server.every() - timers on the server's event loop
+// Run with: hemlock test/timer_test.hml
+//
+// Test state lives on the server object (server.t) rather than in captured
+// variables: spawn() copies the server, and the timer callback (given the
+// listening server) and the packet handler (conn.server) both reach that copy.
+
+import { Server } from "../src/network/server.hml";
+import { Client } from "../src/network/client.hml";
+import { Packet } from "../src/network/packet.hml";
+import { sleep, time_ms } from "@stdlib/time";
+
+let tests_passed = 0;
+let tests_failed = 0;
+let test_port = 19170;
+
+fn next_port() {
+    test_port = test_port + 1;
+    return test_port;
+}
+
+fn test(name, test_fn) {
+    try {
+        test_fn();
+        print("  pass: " + name);
+        tests_passed = tests_passed + 1;
+    } catch (e) {
+        print("  FAIL: " + name + " - " + e);
+        tests_failed = tests_failed + 1;
+    }
+    sleep(0.3);
+}
+
+async fn run_server(srv, p) {
+    srv.listen(p);
+}
+
+print("server timers:");
+
+test("100 ticks at 30 Hz on the loop, packets between them", fn() {
+    let port = next_port();
+    let server = Server();
+    server.t = { calls: 0, periods: 0, first: 0, drift_max: 0, echoes: 0 };
+    server.every(33, fn(periods, srv) {
+        let t = srv.t;
+        let now = time_ms();
+        t.calls = t.calls + 1;
+        t.periods = t.periods + periods;
+        if (t.calls == 1) {
+            t.first = now;
+        }
+        // How late this call is against the first call's schedule
+        let drift = now - (t.first + (t.periods - 1) * 33);
+        if (drift > t.drift_max) {
+            t.drift_max = drift;
+        }
+        if (t.calls <= 100) {
+            let p = Packet(1);
+            p.add(t.calls);
+            srv.broadcast(p);
+        }
+        if (t.calls == 100) {
+            let p = Packet(2);
+            p.add(t.periods);
+            p.add(t.drift_max);
+            p.add(now - t.first);
+            p.add(t.echoes);
+            srv.broadcast(p);
+        }
+    });
+    server.on("packet", fn(conn, packet) {
+        conn.server.t.echoes = conn.server.t.echoes + 1;
+        conn.send(packet);
+    });
+    spawn(run_server, server, port);
+    sleep(0.3);
+
+    let client = Client();
+    try {
+        client.connect("127.0.0.1", port);
+        let ticks = -1;
+        let echoes = 0;
+        let summary = null;
+        while (summary == null) {
+            let pk = client.recv_packet();
+            assert(pk != null, "connection closed early");
+            if (pk.net_id == 1) {
+                // the first tick this client sees is wherever it joined
+                if (ticks >= 0) {
+                    assert(pk.get(0) == ticks + 1, "tick " + pk.get(0) + " followed " + ticks);
+                }
+                ticks = pk.get(0);
+                if (ticks % 5 == 0) {
+                    let e = Packet(3);
+                    e.add(ticks);
+                    client.send(e);
+                }
+            } else if (pk.net_id == 3) {
+                echoes = echoes + 1;
+            } else if (pk.net_id == 2) {
+                summary = pk;
+            }
+        }
+        // Ticks run from the moment listen() starts, before this client
+        // connects, so the first few broadcasts reach nobody
+        assert(ticks == 100, "the last tick seen was " + ticks);
+        assert(echoes >= 15, "only " + echoes + " echoes interleaved");
+        let periods = summary.get(0);
+        let drift_max = summary.get(1);
+        let span = summary.get(2);
+        print("    periods " + periods + ", span " + span + " ms (ideal 3267), worst lateness " + drift_max + " ms, " + summary.get(3) + " packets handled between ticks");
+        assert(periods == 100, "an idle loop should never be owed catch-up, got " + periods + " periods in 100 calls");
+        assert(drift_max <= 10, "a call was " + drift_max + " ms late");
+        assert(span >= 3240 && span <= 3300, "100 periods took " + span + " ms");
+    } finally {
+        client.disconnect();
+        sleep(0.3);
+        server.close();
+    }
+});
+
+test("a stalled loop is told how many periods passed, not queued", fn() {
+    let port = next_port();
+    let server = Server();
+    server.t = { calls: 0, periods: 0, max_periods: 0, first: 0 };
+    server.every(20, fn(periods, srv) {
+        let t = srv.t;
+        t.calls = t.calls + 1;
+        t.periods = t.periods + periods;
+        if (periods > t.max_periods) {
+            t.max_periods = periods;
+        }
+        if (t.calls == 1) {
+            t.first = time_ms();
+        }
+        if (t.calls == 3) {
+            sleep(0.25); // the loop stalls for about 12 periods
+        }
+    });
+    server.on("packet", fn(conn, packet) {
+        let t = conn.server.t;
+        let p = Packet(2);
+        p.add(t.calls);
+        p.add(t.periods);
+        p.add(t.max_periods);
+        p.add(time_ms() - t.first);
+        conn.send(p);
+    });
+    spawn(run_server, server, port);
+    sleep(0.6);
+
+    let client = Client();
+    try {
+        client.connect("127.0.0.1", port);
+        client.send(Packet(1));
+        let r = client.recv_packet();
+        let calls = r.get(0);
+        let periods = r.get(1);
+        let max_periods = r.get(2);
+        let span = r.get(3);
+        print("    " + calls + " calls covered " + periods + " periods over " + span + " ms; the call after the stall carried " + max_periods);
+        assert(max_periods >= 10 && max_periods <= 14, "after a 250 ms stall the next call should carry about 12 periods, got " + max_periods);
+        assert(calls < periods - 8, "the stall should not queue a call per period");
+        // periods counted from the first call track wall time to within a period or two
+        let owed = span / 20 + 1;
+        assert(periods >= owed - 2 && periods <= owed + 1, "periods " + periods + " against " + owed + " owed");
+    } finally {
+        client.disconnect();
+        sleep(0.3);
+        server.close();
+    }
+});
+
+test("cancel() from inside a callback stops it", fn() {
+    let port = next_port();
+    let server = Server();
+    server.t = { calls: 0, id: -1 };
+    server.t.id = server.every(10, fn(periods, srv) {
+        srv.t.calls = srv.t.calls + 1;
+        if (srv.t.calls == 5) {
+            assert(srv.cancel(srv.t.id) == true, "cancel should find the timer");
+        }
+    });
+    server.on("packet", fn(conn, packet) {
+        let p = Packet(2);
+        p.add(conn.server.t.calls);
+        conn.send(p);
+    });
+    spawn(run_server, server, port);
+    sleep(0.4);
+
+    let client = Client();
+    try {
+        client.connect("127.0.0.1", port);
+        client.send(Packet(1));
+        let r = client.recv_packet();
+        assert(r.get(0) == 5, "expected 5 calls, got " + r.get(0));
+    } finally {
+        client.disconnect();
+        sleep(0.3);
+        server.close();
+    }
+});
+
+test("close() with a running timer returns promptly", fn() {
+    let port = next_port();
+    let server = Server();
+    server.every(1000, fn(periods, srv) { });
+    spawn(run_server, server, port);
+    sleep(0.3);
+    let t0 = time_ms();
+    server.close();
+    let took = time_ms() - t0;
+    assert(took < 1500, "close took " + took + " ms");
+});
+
+test("every() rejects a non-positive period", fn() {
+    let server = Server();
+    let threw = false;
+    try {
+        server.every(0, fn(periods, srv) { });
+    } catch (e) {
+        threw = true;
+    }
+    assert(threw, "every(0) should throw");
+});
+
+print("");
+print("========================================");
+print("Timer Tests: " + tests_passed + " passed, " + tests_failed + " failed");
+print("========================================");
+assert(tests_failed == 0, "All tests should pass");

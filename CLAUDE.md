@@ -61,6 +61,7 @@ test/
   gm_convert_test.hml    - 59 tests for binary conversion
   packet_test.hml        - 19 tests for packet serialization
   server_client_test.hml - 9 integration tests
+  timer_test.hml         - 5 tests for Server.every()/cancel()
   vectors_test.hml       - shared protocol vectors (vectors/protocol.json, copied from gn.js)
 ```
 
@@ -73,6 +74,7 @@ hemlock example/echo.hml
 hemlock test/gm_convert_test.hml
 hemlock test/packet_test.hml
 hemlock test/server_client_test.hml
+hemlock test/timer_test.hml
 hemlock test/vectors_test.hml
 ```
 

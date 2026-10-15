@@ -72,6 +72,8 @@ server.on("disconnect", fn(connection) { });
 server.on("error", fn(err, connection) { }); // connection is null if none applies
 server.listen(port);           // Blocks - run in a spawned task
 server.broadcast(packet, exclude);
+let id = server.every(33, fn(periods, srv) { }); // A timer on the event loop
+server.cancel(id);
 server.close();                // Stop; safe from any task or callback
 ```
 
@@ -79,6 +81,14 @@ server.close();                // Stop; safe from any task or callback
 listening task and waits until it has shut down. Calling it from inside a
 callback stops the server once the callback returns. Text (non-binary)
 messages are reported to the `error` callback.
+
+`every(ms, fn)` calls `fn(periods, srv)` on the listening task's thread, between
+packets, so a timer can step game state that packet handlers also change without
+locking. `srv` is the listening copy of the server (use it, not the variable you
+hold, for `broadcast()` and the connection list). Deadlines are absolute, so the
+period does not drift; if the loop falls behind, the next call's `periods` says
+how many passed rather than queuing a call for each. Register timers before
+`listen()` or from inside a callback.
 
 `listen()` blocks the calling thread. Spawn it in a background task:
 
@@ -139,9 +149,11 @@ hemlock example/multiclient.hml
 ## Running Tests
 
 ```bash
-hemlock test/gm_convert_test.hml    # 34 tests - binary conversion
-hemlock test/packet_test.hml        # 10 tests - packet serialization
-hemlock test/server_client_test.hml #  5 tests - server/client integration
+hemlock test/gm_convert_test.hml    # 59 tests - binary conversion
+hemlock test/packet_test.hml        # 19 tests - packet serialization
+hemlock test/server_client_test.hml #  9 tests - server/client integration
+hemlock test/timer_test.hml         #  5 tests - every(): rate, catch-up, cancel
+hemlock test/vectors_test.hml       # 47 tests - shared protocol vectors
 ```
 
 ## License
