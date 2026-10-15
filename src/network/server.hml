@@ -74,11 +74,17 @@ async fn timer_loop(timer_id, ms, event_ch, stop_ch, token_ch) {
     let elapsed = 0;   // periods that have passed
     let posted = 0;    // periods already handed to the loop
     while (true) {
+        // ms may be fractional (1000 / 30); select() takes whole milliseconds,
+        // so round the wait up rather than wake early and spin
         let wait = start + (elapsed + 1) * ms - time_ms();
-        if (wait < 0) {
-            wait = 0;
+        let wait_ms = 0;
+        if (wait > 0) {
+            wait_ms = integer(wait);
+            if (wait_ms < wait) {
+                wait_ms = wait_ms + 1;
+            }
         }
-        if (select([stop_ch], wait) != null) {
+        if (select([stop_ch], wait_ms) != null) {
             break;
         }
         let now = time_ms();

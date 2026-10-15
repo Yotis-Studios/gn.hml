@@ -61,7 +61,7 @@ test/
   gm_convert_test.hml    - 59 tests for binary conversion
   packet_test.hml        - 19 tests for packet serialization
   server_client_test.hml - 9 integration tests
-  timer_test.hml         - 5 tests for Server.every()/cancel()
+  timer_test.hml         - 6 tests for Server.every()/cancel()
   vectors_test.hml       - shared protocol vectors (vectors/protocol.json, copied from gn.js)
 ```
 

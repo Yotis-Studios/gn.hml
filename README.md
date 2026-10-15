@@ -152,7 +152,7 @@ hemlock example/multiclient.hml
 hemlock test/gm_convert_test.hml    # 59 tests - binary conversion
 hemlock test/packet_test.hml        # 19 tests - packet serialization
 hemlock test/server_client_test.hml #  9 tests - server/client integration
-hemlock test/timer_test.hml         #  5 tests - every(): rate, catch-up, cancel
+hemlock test/timer_test.hml         #  6 tests - every(): rate, catch-up, cancel
 hemlock test/vectors_test.hml       # 47 tests - shared protocol vectors
 ```
 

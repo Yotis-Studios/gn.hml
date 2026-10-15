@@ -202,6 +202,47 @@ test("cancel() from inside a callback stops it", fn() {
     }
 });
 
+test("a fractional period (1000 / 30) keeps its average", fn() {
+    let port = next_port();
+    let server = Server();
+    server.t = { calls: 0, periods: 0, first: 0, span: 0 };
+    server.every(1000 / 30, fn(periods, srv) {
+        let t = srv.t;
+        t.calls = t.calls + 1;
+        t.periods = t.periods + periods;
+        if (t.calls == 1) {
+            t.first = time_ms();
+        }
+        if (t.calls == 61) {
+            t.span = time_ms() - t.first;
+        }
+    });
+    server.on("packet", fn(conn, packet) {
+        let p = Packet(2);
+        p.add(conn.server.t.calls);
+        p.add(conn.server.t.periods);
+        p.add(conn.server.t.span);
+        conn.send(p);
+    });
+    spawn(run_server, server, port);
+    sleep(2.5);
+
+    let client = Client();
+    try {
+        client.connect("127.0.0.1", port);
+        client.send(Packet(1));
+        let r = client.recv_packet();
+        let span = r.get(2);
+        print("    60 periods of 33.3 ms took " + span + " ms (ideal 2000); " + r.get(0) + " calls, " + r.get(1) + " periods");
+        assert(r.get(0) == r.get(1), "an idle loop should get one period per call");
+        assert(span >= 1995 && span <= 2010, "60 periods took " + span + " ms");
+    } finally {
+        client.disconnect();
+        sleep(0.3);
+        server.close();
+    }
+});
+
 test("close() with a running timer returns promptly", fn() {
     let port = next_port();
     let server = Server();
