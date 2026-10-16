@@ -10,9 +10,20 @@ export fn Connection(ws, server) {
         server: server,
         code: null,
         message: null,
+        _reporting: false,   // inside on("error") for a failed send on this connection
 
-        // Send a Packet or raw buffer to this connection
+        // Send a Packet or raw buffer to this connection. Returns whether it was written.
+        //
+        // A closed connection is not an error: it was kicked, or its close has been seen, and
+        // its disconnect event is on the way. Servers send to such connections all the time
+        // in the gap (a broadcast, a timer's snapshot, a host switch), and reporting each one
+        // as an error invited the handler to answer by sending again. A handler that does
+        // send on a failing connection is not reported to recursively either: answered from
+        // inside its own catch, every failure made another, until the C stack ran out.
         send: fn(packet) {
+            if (self.ws.closed) {
+                return false;
+            }
             let data = null;
             if (typeof(packet) == "object" && packet.build != null) {
                 data = packet.build();
@@ -20,13 +31,22 @@ export fn Connection(ws, server) {
                 data = packet;
             }
             try {
-                self.ws.send_binary(data);
+                return self.ws.send_binary(data);
             } catch (e) {
+                if (self._reporting) {
+                    return false;
+                }
                 print("Error sending: " + e);
                 if (self.server._on_error != null) {
-                    self.server._on_error(e, self);
+                    self._reporting = true;
+                    try {
+                        self.server._on_error(e, self);
+                    } finally {
+                        self._reporting = false;
+                    }
                 }
             }
+            return false;
         },
 
         // Broadcast a packet to all connections except this one

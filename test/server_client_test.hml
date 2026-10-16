@@ -288,6 +288,108 @@ test("text message is reported as an error", fn() {
     }
 });
 
+test("a send to a kicked connection is quiet, and an error handler cannot recurse", fn() {
+    // A server that kicks a connection usually still holds it until the disconnect event comes
+    // round, and sends to it meanwhile: a broadcast, a timer's snapshot, a host switch. Each
+    // such send threw "Cannot send on closed WebSocket" into on("error"), and a handler that
+    // answers by sending on that connection (shikikan's sends a PLAYER_KICK) threw again from
+    // inside its own catch: about 3,900 levels deep the C stack ran out and the whole server
+    // died with a segfault, every other client with it. The handlers count on the listening
+    // server itself (conn.server): spawn gives each closure its own copy of what it captures.
+    let port = next_port();
+    let server = Server();
+    server.seen_errors = 0;
+    server.seen_disconnects = 0;
+    server.on("packet", fn(conn, packet) {
+        let what = packet.get(0);
+        if (what == 1) {
+            conn.kick();
+            conn.send(packet);
+            conn.send(packet);
+        } else if (what == 2) {
+            let p = Packet(2);
+            p.add(conn.server.seen_errors);
+            p.add(conn.server.seen_disconnects);
+            conn.send(p);
+        }
+    });
+    server.on("error", fn(err, conn) {
+        if (conn != null) {
+            conn.server.seen_errors = conn.server.seen_errors + 1;
+            let kick = Packet(99);
+            kick.add("An error occurred sending data.");
+            conn.send(kick);
+        }
+    });
+    server.on("disconnect", fn(conn) {
+        conn.server.seen_disconnects = conn.server.seen_disconnects + 1;
+    });
+    spawn(run_server, server, port);
+    sleep(0.5);
+
+    let a = Client();
+    a.connect("127.0.0.1", port);
+    let kick_me = Packet(1);
+    kick_me.add(1);
+    a.send(kick_me);
+    sleep(0.5);
+    a.disconnect();
+    sleep(0.3);
+
+    let b = Client();
+    try {
+        b.connect("127.0.0.1", port);
+        let ask = Packet(1);
+        ask.add(2);
+        b.send(ask);
+        let counts = b.recv_packet();
+        assert(counts != null, "the server should still answer after the kick");
+        assert(counts.get(0) == 0, "a send to a kicked connection should not be an error, got " + counts.get(0));
+        assert(counts.get(1) == 1, "the kicked connection's disconnect should be reported, got " + counts.get(1));
+    } finally {
+        b.disconnect();
+        sleep(0.3);
+        server.close();
+    }
+});
+
+test("an error handler that resends a failing send is told once", fn() {
+    // The other half of the guard: a send that throws on an open connection (here a value
+    // send_binary refuses), answered by a handler that tries the same send again.
+    let port = next_port();
+    let server = Server();
+    server.seen_errors = 0;
+    server.on("packet", fn(conn, packet) {
+        if (packet.get(0) == 1) {
+            conn.send("not a buffer");
+            let p = Packet(2);
+            p.add(conn.server.seen_errors);
+            conn.send(p);
+        }
+    });
+    server.on("error", fn(err, conn) {
+        conn.server.seen_errors = conn.server.seen_errors + 1;
+        conn.send("not a buffer");
+    });
+    spawn(run_server, server, port);
+    sleep(0.5);
+
+    let a = Client();
+    try {
+        a.connect("127.0.0.1", port);
+        let p = Packet(1);
+        p.add(1);
+        a.send(p);
+        let counts = a.recv_packet();
+        assert(counts != null, "the server should answer after the failed send");
+        assert(counts.get(0) == 1, "the handler should be told once, got " + counts.get(0));
+    } finally {
+        a.disconnect();
+        sleep(0.3);
+        server.close();
+    }
+});
+
 // ===== Summary =====
 print("");
 print("========================================");

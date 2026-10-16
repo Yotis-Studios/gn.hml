@@ -119,10 +119,15 @@ Two receive modes:
 ### Connection (server-side)
 
 ```hemlock
-connection.send(packet);
+connection.send(packet);       // true if written
 connection.broadcast(packet);  // Send to all except this connection
 connection.kick();             // Close connection
 ```
+
+A send to a connection that is closed (kicked, or its close already seen, its disconnect
+still on the way) returns false and is not an error. A send that fails otherwise is reported
+to `on("error")` once; if the handler sends on the same connection and that fails too, it
+returns false instead of reporting again.
 
 ## Protocol
 
