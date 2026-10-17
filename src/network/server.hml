@@ -10,10 +10,15 @@ import { parse_packets } from "./packet.hml";
 import { Connection } from "./connection.hml";
 import { time_ms } from "@stdlib/time";
 
-// Per-connection receive loop - pushes events onto shared channel
-async fn connection_recv_loop(ws_conn, conn_id, event_ch) {
+// Per-connection receive loop - pushes events onto shared channel. It owns the socket: a kick
+// (Connection.kick) asks it to close through close_ch, and it does between two reads.
+async fn connection_recv_loop(ws_conn, conn_id, event_ch, close_ch) {
     try {
         while (!ws_conn.closed) {
+            if (select([close_ch], 0) != null) {
+                ws_conn.close();
+                break;
+            }
             let msg = ws_conn.recv(100);
             if (msg == null) {
                 if (ws_conn.closed) {
@@ -269,11 +274,12 @@ export fn Server() {
                     let conn_id = self._next_conn_id;
                     self._next_conn_id = self._next_conn_id + 1;
 
-                    let connection = Connection(event.ws_conn, self);
+                    let close_ch = channel(1);
+                    let connection = Connection(event.ws_conn, self, close_ch);
                     self._connections.push(connection);
                     self._conn_map.push({ id: conn_id, conn: connection });
 
-                    let recv_task = spawn(connection_recv_loop, event.ws_conn, conn_id, self._event_ch);
+                    let recv_task = spawn(connection_recv_loop, event.ws_conn, conn_id, self._event_ch, close_ch);
                     self._recv_tasks.push(recv_task);
 
                     if (self._on_connect != null) {

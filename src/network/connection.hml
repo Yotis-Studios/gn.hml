@@ -4,13 +4,16 @@
 import { Packet } from "./packet.hml";
 
 // Create a Connection wrapping a WebSocket connection handle
-export fn Connection(ws, server) {
+// close_ch: the connection's receive task listens on it and closes the socket itself (kick).
+export fn Connection(ws, server, close_ch?: null) {
     return {
         ws: ws,
         server: server,
         code: null,
         message: null,
         _reporting: false,   // inside on("error") for a failed send on this connection
+        _close_ch: close_ch,
+        _closing: false,     // kicked: the receive task closes the socket within 100 ms
 
         // Send a Packet or raw buffer to this connection. Returns whether it was written.
         //
@@ -21,7 +24,7 @@ export fn Connection(ws, server) {
         // send on a failing connection is not reported to recursively either: answered from
         // inside its own catch, every failure made another, until the C stack ran out.
         send: fn(packet) {
-            if (self.ws.closed) {
+            if (self._closing || self.ws.closed) {
                 return false;
             }
             let data = null;
@@ -54,9 +57,24 @@ export fn Connection(ws, server) {
             self.server.broadcast(packet, self);
         },
 
-        // Close this connection
+        // Close this connection.
+        //
+        // NOT ws.close() FROM HERE. The connection's receive task is inside ws.recv() on its own
+        // thread, and closing the socket under it frees the descriptor while that task still
+        // holds it: a connection accepted in the next 100 ms can be given the same number, and
+        // the old task then reads from it or closes it. Measured in shikikan's rejoin test (a
+        // seat turned away, the next connection killed 30 ms after it opened, in about half the
+        // runs). The receive task owns the socket, so it closes it, on its next wake-up; this
+        // stops sends at once. Without a close channel (a Connection made by hand) it closes
+        // directly, as before.
         kick: fn() {
-            self.ws.close();
+            if (self._closing) { return; }
+            self._closing = true;
+            if (self._close_ch != null) {
+                self._close_ch.send("close");
+            } else {
+                self.ws.close();
+            }
         },
     };
 }
